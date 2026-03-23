@@ -529,15 +529,31 @@ async function onStartClawing(event) {
   setStatus(el.faucetStatus, 'Checking email confirmation...', false);
 
   try {
-    const kitStatus = await getKitSubscriberStatus(signupEmail);
+    const kitStatus = await getKitSubscriberStatus(signupEmail, owner);
     if (!kitStatus.confirmed) {
       const reason =
         kitStatus.error ||
         (kitStatus.state === 'inactive'
           ? 'Please confirm your email.'
           : 'Please confirm your email.');
+      let modalTitle = 'Could not start clawing';
+      let modalFocus = 'email';
+      if (kitStatus.failureCode === 'KIT_EMAIL_NOT_REGISTERED') {
+        modalTitle = 'Please sign up first';
+        modalFocus = 'email';
+      } else if (kitStatus.failureCode === 'KIT_EMAIL_NOT_CONFIRMED') {
+        modalTitle = 'Please confirm your email';
+        modalFocus = 'email';
+      } else if (
+        kitStatus.failureCode === 'KIT_WALLET_MISMATCH' ||
+        kitStatus.failureCode === 'KIT_WALLET_REGISTERED_TO_OTHER_EMAIL' ||
+        kitStatus.failureCode === 'KIT_WALLET_DUPLICATE'
+      ) {
+        modalTitle = 'Wallet check failed';
+        modalFocus = 'wallet';
+      }
       setStatus(el.faucetStatus, reason, true);
-      openValidationModal('Please confirm your email', 'Please confirm your email.', 'email');
+      openValidationModal(modalTitle, reason, modalFocus);
       return;
     }
 
@@ -547,7 +563,11 @@ async function onStartClawing(event) {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addr: owner }),
+        body: JSON.stringify({
+          addr: owner,
+          email: signupEmail,
+          verifyKit: true,
+        }),
       },
     );
 
@@ -594,22 +614,30 @@ function buildFaucetEmbedUrl(hashPath) {
   return `${FAUCET_BASE_URL}/?embed=1&ui=claw${hashPath}`;
 }
 
-async function getKitSubscriberStatus(email) {
+async function getKitSubscriberStatus(email, eoa) {
   try {
+    const query = new URLSearchParams({
+      email: email || '',
+    });
+    if (eoa) {
+      query.set('eoa', eoa);
+    }
     const response = await fetch(
-      `${FAUCET_API_BASE}/kitSubscriberStatus?email=${encodeURIComponent(email)}`,
+      `${FAUCET_API_BASE}/kitSubscriberStatus?${query.toString()}`,
     );
     const data = await response.json();
     return {
       confirmed: data?.confirmed === true,
       state: typeof data?.state === 'string' ? data.state : null,
       error: data?.error ? String(data.error) : null,
+      failureCode: data?.failureCode ? String(data.failureCode) : null,
     };
   } catch {
     return {
       confirmed: false,
       state: null,
       error: 'Please confirm your email.',
+      failureCode: 'KIT_API_ERROR',
     };
   }
 }

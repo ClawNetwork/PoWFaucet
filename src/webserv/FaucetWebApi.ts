@@ -77,6 +77,7 @@ export interface IClientSessionStatus {
 
 
 export const FAUCETSTATUS_CACHE_TIME = 10;
+const KIT_SUBSCRIBERS_CACHE_TIME = 30;
 
 export class FaucetWebApi {
   private apiEndpoints: {[endpoint: string]: (req: IncomingMessage, url: IFaucetApiUrl, body: Buffer) => Promise<any>} = {};
@@ -84,6 +85,10 @@ export class FaucetWebApi {
     time: number;
     data: any;
   }} = {};
+  private cachedKitSubscribers: {
+    time: number;
+    subscribers: any[];
+  } = null;
 
   public async onApiRequest(req: IncomingMessage, body?: Buffer): Promise<any> {
     let apiUrl = this.parseApiUrl(req.url);
@@ -101,7 +106,7 @@ export class FaucetWebApi {
       case "deriveSmartAccount".toLowerCase():
         return this.onDeriveSmartAccount(req, body);
       case "kitSubscriberStatus".toLowerCase():
-        return this.onKitSubscriberStatus(req, apiUrl.query["email"] as string);
+        return this.onKitSubscriberStatus(req, apiUrl.query["email"] as string, apiUrl.query["eoa"] as string);
       case "getSession".toLowerCase():
         return this.onGetSession(apiUrl.query['session'] as string);
       case "claimReward".toLowerCase():
@@ -253,86 +258,240 @@ export class FaucetWebApi {
     }
   }
 
-  public async onKitSubscriberStatus(req: IncomingMessage, email: string): Promise<any> {
-    if(req.method !== "GET")
-      return new FaucetHttpResponse(405, "Method Not Allowed");
-
-    let normalizedEmail = "";
+  private decodeQueryValue(value: string): string {
     try {
-      normalizedEmail = decodeURIComponent((email || "").trim());
+      return decodeURIComponent((value || "").trim());
     } catch {
-      normalizedEmail = (email || "").trim();
+      return (value || "").trim();
     }
+  }
+
+  private normalizeEthAddress(value: any): string {
+    if(typeof value !== "string")
+      return null;
+    const trimmed = value.trim();
+    if(!(/^0x[0-9a-fA-F]{40}$/.test(trimmed)) || /^0x0{40}$/i.test(trimmed))
+      return null;
+    return trimmed.toLowerCase();
+  }
+
+  private getKitApiConfig(): { apiKey: string, apiBase: string } {
+    const apiKey = (process.env.KIT_API_KEY || "").trim();
+    const apiBase = (process.env.KIT_API_BASE_URL || "https://api.kit.com/v4").trim();
+    return { apiKey, apiBase };
+  }
+
+  private async fetchKitSubscribers(
+    apiKey: string,
+    apiBase: string,
+    query: {[key: string]: string}
+  ): Promise<any> {
+    const url = new URL("subscribers", apiBase.endsWith("/") ? apiBase : `${apiBase}/`);
+    Object.keys(query || {}).forEach((key) => {
+      const value = query[key];
+      if(value !== undefined && value !== null && value !== "")
+        url.searchParams.set(key, value);
+    });
+
+    const response = await FetchUtil.fetchWithTimeout(
+      url.toString(),
+      {
+        method: "GET",
+        headers: {
+          "X-Kit-Api-Key": apiKey,
+          "Accept": "application/json",
+        },
+      },
+      10000,
+    );
+
+    if(!response.ok)
+      throw new Error(`Kit API request failed (${response.status})`);
+
+    return await response.json();
+  }
+
+  private extractSubscriberEoa(subscriber: any): string {
+    const fields = subscriber?.fields;
+    if(!fields || typeof fields !== "object")
+      return null;
+
+    let fallbackAddr: string = null;
+    for(const rawKey of Object.keys(fields)) {
+      const rawValue = fields[rawKey];
+      if(typeof rawValue !== "string")
+        continue;
+
+      const normalizedAddr = this.normalizeEthAddress(rawValue);
+      if(!normalizedAddr)
+        continue;
+
+      const key = (rawKey || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if(key === "eoa" || key === "wallet" || key === "walletaddress" || key === "ownerwallet")
+        return normalizedAddr;
+      if(key.includes("eoa") || key.includes("wallet"))
+        fallbackAddr = normalizedAddr;
+    }
+    return fallbackAddr;
+  }
+
+  private async getAllKitSubscribers(apiKey: string, apiBase: string): Promise<any[]> {
+    const now = Math.floor(new Date().getTime() / 1000);
+    if(this.cachedKitSubscribers && this.cachedKitSubscribers.time >= now - KIT_SUBSCRIBERS_CACHE_TIME) {
+      return this.cachedKitSubscribers.subscribers;
+    }
+
+    const subscribers: any[] = [];
+    let cursor: string = null;
+    let guard = 0;
+
+    while(guard < 200) {
+      const query: {[key: string]: string} = {
+        status: "all",
+        per_page: "1000",
+      };
+      if(cursor)
+        query.after = cursor;
+
+      const payload = await this.fetchKitSubscribers(apiKey, apiBase, query);
+      const pageSubscribers = Array.isArray(payload?.subscribers) ? payload.subscribers : [];
+      subscribers.push(...pageSubscribers);
+
+      const pagination = payload?.pagination || {};
+      if(!pagination?.has_next_page || !pagination?.end_cursor)
+        break;
+
+      cursor = pagination.end_cursor;
+      guard++;
+    }
+
+    this.cachedKitSubscribers = {
+      time: now,
+      subscribers,
+    };
+    return subscribers;
+  }
+
+  private async verifyKitSubscriber(email: string, eoa: string): Promise<any> {
+    const normalizedEmail = this.decodeQueryValue(email);
+    const requestedEoa = this.normalizeEthAddress(this.decodeQueryValue(eoa));
 
     if(!this.isValidEmail(normalizedEmail)) {
       return {
         success: false,
         confirmed: false,
-        state: null,
+        failureCode: "KIT_INVALID_EMAIL",
         error: "Invalid email address",
+        state: null,
       };
     }
 
-    const apiKey = (process.env.KIT_API_KEY || "").trim();
-    const apiBase = (process.env.KIT_API_BASE_URL || "https://api.kit.com/v4").trim();
+    const { apiKey, apiBase } = this.getKitApiConfig();
     if(!apiKey) {
       return {
         success: false,
         confirmed: false,
-        state: null,
+        failureCode: "KIT_NOT_CONFIGURED",
         error: "Email confirmation check is not configured",
+        state: null,
       };
     }
 
     try {
-      const url = new URL("subscribers", apiBase.endsWith("/") ? apiBase : `${apiBase}/`);
-      url.searchParams.set("email_address", normalizedEmail);
-      url.searchParams.set("status", "all");
-      url.searchParams.set("per_page", "50");
-
-      const response = await FetchUtil.fetchWithTimeout(
-        url.toString(),
-        {
-          method: "GET",
-          headers: {
-            "X-Kit-Api-Key": apiKey,
-            "Accept": "application/json",
-          },
-        },
-        10000,
-      );
-
-      if(!response.ok) {
-        return {
-          success: false,
-          confirmed: false,
-          state: null,
-          error: `Kit API request failed (${response.status})`,
-        };
-      }
-
-      const payload = await response.json() as any;
+      const payload = await this.fetchKitSubscribers(apiKey, apiBase, {
+        email_address: normalizedEmail,
+        status: "all",
+        per_page: "100",
+      });
       const subscribers = Array.isArray(payload?.subscribers) ? payload.subscribers : [];
       const target = subscribers.find((item: any) => {
         const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
         return itemEmail === normalizedEmail.toLowerCase();
-      });
+      }) || null;
 
       const state = typeof target?.state === "string" ? target.state.toLowerCase() : null;
+      const emailExists = !!target;
+      const emailConfirmed = state === "active";
+      const subscriberEoa = this.extractSubscriberEoa(target);
+
+      let eoaExists = false;
+      let eoaMatches = requestedEoa ? false : null;
+      let eoaExistsOnOtherSubscriber = false;
+      let eoaSubscriberIds: (string | number)[] = [];
+
+      if(requestedEoa) {
+        const allSubscribers = await this.getAllKitSubscribers(apiKey, apiBase);
+        eoaSubscriberIds = allSubscribers
+          .filter((item) => this.extractSubscriberEoa(item) === requestedEoa)
+          .map((item) => item?.id)
+          .filter((id) => id !== undefined && id !== null);
+        eoaExists = eoaSubscriberIds.length > 0;
+        eoaMatches = !!subscriberEoa && subscriberEoa === requestedEoa;
+
+        const targetId = target?.id;
+        if(targetId !== undefined && targetId !== null) {
+          eoaExistsOnOtherSubscriber = eoaSubscriberIds.some((id) => String(id) !== String(targetId));
+        } else {
+          eoaExistsOnOtherSubscriber = eoaExists;
+        }
+      }
+
+      let confirmed = emailExists && emailConfirmed;
+      let failureCode: string = null;
+      let error: string = null;
+
+      if(!emailExists) {
+        confirmed = false;
+        failureCode = "KIT_EMAIL_NOT_REGISTERED";
+        error = "Please sign up first.";
+      } else if(!emailConfirmed) {
+        confirmed = false;
+        failureCode = "KIT_EMAIL_NOT_CONFIRMED";
+        error = "Please confirm your email.";
+      } else if(requestedEoa && !eoaMatches) {
+        confirmed = false;
+        failureCode = eoaExistsOnOtherSubscriber
+          ? "KIT_WALLET_REGISTERED_TO_OTHER_EMAIL"
+          : "KIT_WALLET_MISMATCH";
+        error = eoaExistsOnOtherSubscriber
+          ? "Wallet address is already registered with another email."
+          : "Wallet address does not match your signed-up wallet.";
+      } else if(requestedEoa && eoaExistsOnOtherSubscriber) {
+        confirmed = false;
+        failureCode = "KIT_WALLET_DUPLICATE";
+        error = "Wallet address is already associated with another subscriber.";
+      }
+
       return {
         success: true,
-        confirmed: state === "active",
+        confirmed,
+        failureCode,
+        error,
         state,
         subscriberId: target?.id ?? null,
+        emailExists,
+        requestedEoa,
+        subscriberEoa,
+        eoaMatches,
+        eoaExists,
+        eoaExistsOnOtherSubscriber,
+        eoaSubscriberIds,
       };
     } catch(ex) {
       return {
         success: false,
         confirmed: false,
-        state: null,
+        failureCode: "KIT_API_ERROR",
         error: ex?.toString?.() || "Could not verify subscriber status",
+        state: null,
       };
     }
+  }
+
+  public async onKitSubscriberStatus(req: IncomingMessage, email: string, eoa?: string): Promise<any> {
+    if(req.method !== "GET")
+      return new FaucetHttpResponse(405, "Method Not Allowed");
+    return this.verifyKitSubscriber(email, eoa);
   }
 
   private isValidEmail(email: string): boolean {
@@ -350,6 +509,17 @@ export class FaucetWebApi {
     let sessionInfo: IClientSessionInfo;
     let session: FaucetSession;
     try {
+      if(!!userInput?.verifyKit || !!userInput?.email) {
+        const kitStatus = await this.verifyKitSubscriber(userInput?.email, userInput?.addr);
+        if(!kitStatus.success || !kitStatus.confirmed) {
+          return {
+            status: FaucetSessionStatus.FAILED,
+            failedCode: kitStatus.failureCode || "KIT_VERIFICATION_FAILED",
+            failedReason: kitStatus.error || "Could not verify signup email and wallet.",
+          };
+        }
+      }
+
       session = await ServiceManager.GetService(SessionManager).createSession(this.getRemoteAddr(req), userInput);
       let smartAccountAddress = await this.deriveSmartAccount(session.getTargetAddr());
       if(smartAccountAddress) {
