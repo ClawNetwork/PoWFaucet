@@ -3,7 +3,6 @@ const FAUCET_BASE_URL = 'https://faucet.fartbag.fun';
 const FAUCET_IFRAME_ORIGIN = 'https://faucet.fartbag.fun';
 const FAUCET_API_BASE = '/faucet-api';
 const FAUCET_CLIENT_VERSION = '2.4.2';
-const KIT_SUBSCRIBE_ENDPOINT = 'https://app.kit.com/forms/9238977/subscriptions';
 const SIMPLE_ACCOUNT_FACTORY = '0x02e10A72Da4B211D432dC082f9440fe4ad383e07';
 const RPC_CANDIDATES = ['https://ora0.fartbag.fun/'];
 const GET_ADDRESS_SELECTOR = '0x8cb84e18';
@@ -422,12 +421,23 @@ function onSubscribe(event) {
       );
       setStatus(el.subscribeStatus, `Signed up: ${email} (${shortAddress(eoa)})`, false);
     })
-    .catch(() => {
+    .catch((error) => {
+      const reason =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not reach Kit right now. Please retry in a few seconds.';
       setStatus(
         el.subscribeStatus,
-        'Could not reach Kit right now. Please retry in a few seconds.',
+        reason,
         true,
       );
+      if (
+        error &&
+        typeof error === 'object' &&
+        String(error.failureCode || '') === 'KIT_EMAIL_EOA_LOCKED'
+      ) {
+        openValidationModal('Email already linked', reason, 'wallet');
+      }
     })
     .finally(() => {
       if (submitButton instanceof HTMLButtonElement) {
@@ -438,23 +448,29 @@ function onSubscribe(event) {
 
 async function submitKitSubscription(email, eoa) {
   const ip = await getRequiredClientIp();
-  const payload = new URLSearchParams();
-  payload.set('email_address', email);
-  payload.set('fields[eoa]', eoa);
-  payload.set('fields[ip_address]', ip);
-
   if (el.subscribeIpAddress) {
     el.subscribeIpAddress.value = ip;
   }
-
-  // Kit cross-origin submissions don't expose a readable response in the browser,
-  // so this is a best-effort post. If the request reaches Kit, fetch resolves.
-  await fetch(KIT_SUBSCRIBE_ENDPOINT, {
+  const response = await fetch(`${FAUCET_API_BASE}/kitSubscribe`, {
     method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-    body: payload.toString(),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      eoa,
+      ip,
+    }),
   });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success !== true) {
+    const error = new Error(
+      data?.error || `Could not complete signup (HTTP ${response.status}).`,
+    );
+    if (data?.failureCode) {
+      error.failureCode = String(data.failureCode);
+    }
+    throw error;
+  }
+  return data;
 }
 
 function onSubscribeEmailInput() {

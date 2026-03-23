@@ -78,6 +78,9 @@ export interface IClientSessionStatus {
 
 export const FAUCETSTATUS_CACHE_TIME = 10;
 const KIT_SUBSCRIBERS_CACHE_TIME = 30;
+const KIT_SUBSCRIBE_ENDPOINT = (
+  process.env.KIT_SUBSCRIBE_ENDPOINT || "https://app.kit.com/forms/9238977/subscriptions"
+).trim();
 
 export class FaucetWebApi {
   private apiEndpoints: {[endpoint: string]: (req: IncomingMessage, url: IFaucetApiUrl, body: Buffer) => Promise<any>} = {};
@@ -107,6 +110,8 @@ export class FaucetWebApi {
         return this.onDeriveSmartAccount(req, body);
       case "kitSubscriberStatus".toLowerCase():
         return this.onKitSubscriberStatus(req, apiUrl.query["email"] as string, apiUrl.query["eoa"] as string);
+      case "kitSubscribe".toLowerCase():
+        return this.onKitSubscribe(req, body);
       case "getSession".toLowerCase():
         return this.onGetSession(apiUrl.query['session'] as string);
       case "claimReward".toLowerCase():
@@ -372,6 +377,44 @@ export class FaucetWebApi {
     return subscribers;
   }
 
+  private async findKitSubscriberByEmail(apiKey: string, apiBase: string, email: string): Promise<any> {
+    const payload = await this.fetchKitSubscribers(apiKey, apiBase, {
+      email_address: email,
+      status: "all",
+      per_page: "100",
+    });
+    const subscribers = Array.isArray(payload?.subscribers) ? payload.subscribers : [];
+    const normalizedEmail = email.toLowerCase();
+    return subscribers.find((item: any) => {
+      const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
+      return itemEmail === normalizedEmail;
+    }) || null;
+  }
+
+  private async submitKitSubscriptionRequest(email: string, eoa: string, ipAddress: string): Promise<void> {
+    const payload = new URLSearchParams();
+    payload.set("email_address", email);
+    payload.set("fields[eoa]", eoa);
+    payload.set("fields[ip_address]", ipAddress || "0.0.0.0");
+
+    const response = await FetchUtil.fetchWithTimeout(
+      KIT_SUBSCRIBE_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        body: payload.toString(),
+      },
+      10000,
+    );
+
+    // Kit form submissions commonly return a redirect (3xx) or success (2xx).
+    if(!(response.status >= 200 && response.status < 400))
+      throw new Error(`Kit subscribe request failed (${response.status})`);
+  }
+
   private async verifyKitSubscriber(email: string, eoa: string): Promise<any> {
     const normalizedEmail = this.decodeQueryValue(email);
     const requestedEoa = this.normalizeEthAddress(this.decodeQueryValue(eoa));
@@ -492,6 +535,104 @@ export class FaucetWebApi {
     if(req.method !== "GET")
       return new FaucetHttpResponse(405, "Method Not Allowed");
     return this.verifyKitSubscriber(email, eoa);
+  }
+
+  public async onKitSubscribe(req: IncomingMessage, body: Buffer): Promise<any> {
+    if(req.method !== "POST")
+      return new FaucetHttpResponse(405, "Method Not Allowed");
+
+    let userInput: any;
+    try {
+      userInput = body ? JSON.parse(body.toString("utf8")) : {};
+    } catch {
+      return {
+        success: false,
+        failureCode: "KIT_INVALID_PAYLOAD",
+        error: "Invalid subscription payload",
+      };
+    }
+
+    const normalizedEmail = this.decodeQueryValue(userInput?.email || "");
+    const requestedEoa = this.normalizeEthAddress(this.decodeQueryValue(userInput?.eoa || ""));
+    const ipAddress = this.decodeQueryValue(userInput?.ip || "") || this.getRemoteAddr(req) || "0.0.0.0";
+
+    if(!this.isValidEmail(normalizedEmail)) {
+      return {
+        success: false,
+        failureCode: "KIT_INVALID_EMAIL",
+        error: "Please enter a valid email address.",
+      };
+    }
+
+    if(!requestedEoa) {
+      return {
+        success: false,
+        failureCode: "KIT_INVALID_EOA",
+        error: "Please provide a valid wallet address.",
+      };
+    }
+
+    const { apiKey, apiBase } = this.getKitApiConfig();
+    if(!apiKey) {
+      return {
+        success: false,
+        failureCode: "KIT_NOT_CONFIGURED",
+        error: "Signup verification is not configured.",
+      };
+    }
+
+    try {
+      const subscriber = await this.findKitSubscriberByEmail(apiKey, apiBase, normalizedEmail);
+      const subscriberState = typeof subscriber?.state === "string" ? subscriber.state.toLowerCase() : null;
+      const subscriberEoa = this.extractSubscriberEoa(subscriber);
+
+      // Once an email is confirmed, permanently lock it to the same EOA.
+      if(subscriberState === "active" && subscriberEoa && subscriberEoa !== requestedEoa) {
+        return {
+          success: false,
+          failureCode: "KIT_EMAIL_EOA_LOCKED",
+          error: "This email is already confirmed with a different wallet address.",
+          email: normalizedEmail,
+          subscriberEoa,
+          requestedEoa,
+        };
+      }
+
+      const allSubscribers = await this.getAllKitSubscribers(apiKey, apiBase);
+      const sameWalletSubscribers = allSubscribers.filter((item) => {
+        if(this.extractSubscriberEoa(item) !== requestedEoa)
+          return false;
+        const state = typeof item?.state === "string" ? item.state.toLowerCase() : "";
+        if(state !== "active")
+          return false;
+        const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
+        return itemEmail !== normalizedEmail.toLowerCase();
+      });
+
+      if(sameWalletSubscribers.length > 0) {
+        return {
+          success: false,
+          failureCode: "KIT_WALLET_REGISTERED_TO_OTHER_EMAIL",
+          error: "Wallet address is already registered with another confirmed email.",
+        };
+      }
+
+      await this.submitKitSubscriptionRequest(normalizedEmail, requestedEoa, ipAddress);
+      this.cachedKitSubscribers = null;
+
+      return {
+        success: true,
+        email: normalizedEmail,
+        eoa: requestedEoa,
+        ipAddress,
+      };
+    } catch(ex) {
+      return {
+        success: false,
+        failureCode: "KIT_API_ERROR",
+        error: ex?.toString?.() || "Could not complete signup right now.",
+      };
+    }
   }
 
   private isValidEmail(email: string): boolean {

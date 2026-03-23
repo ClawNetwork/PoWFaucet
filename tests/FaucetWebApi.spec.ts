@@ -18,6 +18,7 @@ import { FaucetError } from '../src/common/FaucetError.js';
 import { sha256 } from '../src/utils/CryptoUtils.js';
 import { EthWalletManager } from '../src/eth/EthWalletManager.js';
 import { FakeProvider } from './stubs/FakeProvider.js';
+import { FetchUtil } from '../src/utils/FetchUtil.js';
 
 describe("Faucet Web API", () => {
   let globalStubs;
@@ -257,6 +258,114 @@ describe("Faucet Web API", () => {
     })));
     expect(!!apiResponse).equal(true, "no api response");
     expect(apiResponse.failedCode).equal("TEST_ERROR", "unexpected api error code");
+  });
+
+  it("check /api/kitSubscribe (locks confirmed email to original EOA)", async () => {
+    const oldKitKey = process.env.KIT_API_KEY;
+    process.env.KIT_API_KEY = "test-kit-key";
+
+    const fetchStub = sinon.stub(FetchUtil, "fetchWithTimeout").callsFake(async (url: any) => {
+      const reqUrl = new URL(String(url));
+      if(reqUrl.hostname === "api.kit.com") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            subscribers: [
+              {
+                id: 123,
+                email_address: "dom@example.com",
+                state: "active",
+                fields: {
+                  eoa: "0x1111111111111111111111111111111111111111",
+                },
+              },
+            ],
+            pagination: {
+              has_next_page: false,
+              end_cursor: null,
+            },
+          }),
+        } as any;
+      }
+      throw new Error(`unexpected url: ${reqUrl.toString()}`);
+    });
+
+    try {
+      let webApi = new FaucetWebApi();
+      let apiResponse = await webApi.onApiRequest(encodeApiRequest({
+        method: "POST",
+        url: "/api/kitSubscribe",
+        remoteAddr: "8.8.8.8"
+      }), Buffer.from(JSON.stringify({
+        email: "dom@example.com",
+        eoa: "0x2222222222222222222222222222222222222222",
+      })));
+
+      expect(!!apiResponse).equal(true, "no api response");
+      expect(apiResponse.success).equal(false, "subscription lock did not trigger");
+      expect(apiResponse.failureCode).equal("KIT_EMAIL_EOA_LOCKED", "unexpected lock failure code");
+      expect(fetchStub.callCount).equal(1, "unexpected outbound request count");
+    } finally {
+      fetchStub.restore();
+      process.env.KIT_API_KEY = oldKitKey;
+    }
+  });
+
+  it("check /api/kitSubscribe (allows first-time signup)", async () => {
+    const oldKitKey = process.env.KIT_API_KEY;
+    process.env.KIT_API_KEY = "test-kit-key";
+
+    const fetchStub = sinon.stub(FetchUtil, "fetchWithTimeout").callsFake(async (url: any, init: any) => {
+      const reqUrl = new URL(String(url));
+      if(reqUrl.hostname === "api.kit.com") {
+        // Email lookup (no existing subscriber) + all-subscribers scan.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            subscribers: [],
+            pagination: {
+              has_next_page: false,
+              end_cursor: null,
+            },
+          }),
+        } as any;
+      }
+
+      if(reqUrl.hostname === "app.kit.com") {
+        expect((init?.method || "GET").toUpperCase()).equal("POST", "subscribe endpoint called with wrong method");
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        } as any;
+      }
+
+      throw new Error(`unexpected url: ${reqUrl.toString()}`);
+    });
+
+    try {
+      let webApi = new FaucetWebApi();
+      let apiResponse = await webApi.onApiRequest(encodeApiRequest({
+        method: "POST",
+        url: "/api/kitSubscribe",
+        remoteAddr: "8.8.8.8"
+      }), Buffer.from(JSON.stringify({
+        email: "new@example.com",
+        eoa: "0x3333333333333333333333333333333333333333",
+        ip: "1.2.3.4",
+      })));
+
+      expect(!!apiResponse).equal(true, "no api response");
+      expect(apiResponse.success).equal(true, "signup should have succeeded");
+      expect(apiResponse.eoa).equal("0x3333333333333333333333333333333333333333", "unexpected signup wallet");
+      expect(apiResponse.email).equal("new@example.com", "unexpected signup email");
+      expect(fetchStub.callCount).equal(3, "unexpected outbound request count");
+    } finally {
+      fetchStub.restore();
+      process.env.KIT_API_KEY = oldKitKey;
+    }
   });
 
   it("check /api/getSession", async () => {
