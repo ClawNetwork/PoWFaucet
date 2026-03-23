@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html class="powfaucet">
+  <head>
+    <title>PoW Faucet</title>
+    <!-- pow-faucet-header -->
+    <meta charset='utf-8'>
+    <script>
+      (function () {
+        try {
+          var params = new URLSearchParams(window.location.search || '');
+          var isEmbed = params.get('embed') === '1' || params.get('embed') === 'true';
+          if (isEmbed) {
+            document.documentElement.classList.add('powfaucet-embed');
+            document.addEventListener('DOMContentLoaded', function () {
+              var ribbon = document.querySelector('.github-fork-ribbon');
+              if (ribbon && ribbon.parentNode) {
+                ribbon.parentNode.removeChild(ribbon);
+              }
+            });
+          }
+        } catch (_) {}
+      })();
+    </script>
+    <style>
+      .powfaucet-embed .github-fork-ribbon {
+        display: none !important;
+      }
+    </style>
+    <link rel="Stylesheet" type="text/css" href="/css/gh-fork-ribbon.css">
+    <link rel="Stylesheet" type="text/css" href="/css/powfaucet.css">
+    <link href="/site.webmanifest" rel="manifest">
+    <link href="/favicon/apple-touch-icon.png" rel="apple-touch-icon">
+    <link href="/favicon/favicon-32x32.png" rel="icon" sizes="32x32">
+    <link href="/favicon/favicon-16x16.png" rel="icon" sizes="16x16">
+  </head>
+  <body>
+    <div class="faucet-wrapper">
+      <div class="faucet-container faucet-bootstrap">
+        <div class="pow-faucet" data-powfaucet="default">
+          <div class="faucet-page">
+            <div class="page-frontpage">
+              <!-- pow-faucet-content -->
+              <noscript>JavaScript is required to use this faucet.</noscript>
+              <!-- pow-faucet-footer -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="/js/powfaucet.js"></script>
+  </body>
+</html>
