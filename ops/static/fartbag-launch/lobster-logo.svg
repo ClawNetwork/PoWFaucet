@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 170" role="img" aria-label="Cute red lobster logo">
+  <defs>
+    <linearGradient id="lobBody" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff5566"/>
+      <stop offset="100%" stop-color="#ff2b3f"/>
+    </linearGradient>
+    <linearGradient id="lobAccent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff6b78"/>
+      <stop offset="100%" stop-color="#ff3f51"/>
+    </linearGradient>
+    <style>
+      .o { stroke: #8f121f; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+      .f { fill: url(#lobBody); }
+      .fa { fill: url(#lobAccent); }
+    </style>
+  </defs>
+
+  <path class="o f" d="M186 100c17-7 33-18 45-31-4 30-14 49-38 60z"/>
+  <path class="o f" d="M186 100c16 8 30 21 39 38-21-2-35-10-48-25z"/>
+
+  <path class="o fa" d="M63 84c-18 0-35 10-47 28 24-2 42-5 56-18z"/>
+  <path class="o f" d="M62 103c-17 4-32 16-42 35 25-1 42-8 56-21z"/>
+
+  <path class="o f" d="M66 73c18-21 46-31 80-29 30 2 52 17 61 38 8 20 1 42-22 55-35 20-92 18-128-4-27-17-24-44 9-60z"/>
+
+  <path class="o f" d="M92 53 84 21"/>
+  <path class="o f" d="M118 49 125 14"/>
+
+  <ellipse class="o" cx="126" cy="86" rx="10" ry="11" fill="#100f17"/>
+  <ellipse class="o" cx="152" cy="86" rx="10" ry="11" fill="#100f17"/>
+  <ellipse cx="129" cy="83" rx="3" ry="3.5" fill="#ffffff"/>
+  <ellipse cx="155" cy="83" rx="3" ry="3.5" fill="#ffffff"/>
+  <path class="o" d="M134 102c5 6 12 6 17 0" fill="none"/>
+
+  <path class="o" d="M96 113 86 142" fill="none"/>
+  <path class="o" d="M114 116 108 147" fill="none"/>
+  <path class="o" d="M132 116 128 146" fill="none"/>
+
+  <path class="o fa" d="M101 65c10-6 22-9 35-9" fill="none"/>
+  <path class="o fa" d="M83 76c8-6 17-10 27-12" fill="none"/>
+</svg>
