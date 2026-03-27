@@ -150,6 +150,10 @@ function init() {
   });
 
   el.trackerAudioToggle?.addEventListener('click', () => {
+    if (trackerAudioEnabled) {
+      disableTrackerAudio(true);
+      return;
+    }
     enableTrackerAudio(true).catch(() => {
       if (el.trackerAudioToggle) {
         el.trackerAudioToggle.textContent = 'Audio blocked, tap again';
@@ -476,7 +480,8 @@ function spawnBubble() {
   const bubble = document.createElement('img');
   bubble.className = 'reef-bubble';
   bubble.alt = '';
-  bubble.src = BUBBLE_IMAGES[randomInt(0, BUBBLE_IMAGES.length - 1)];
+  const bubbleType = randomInt(0, BUBBLE_IMAGES.length - 1);
+  bubble.src = BUBBLE_IMAGES[bubbleType];
   bubble.decoding = 'async';
 
   const mobile = isMobileBubbleMode();
@@ -517,6 +522,7 @@ function spawnBubble() {
   bubble.addEventListener('animationend', handleDone);
   activeBubbles.add(bubble);
   el.reefBubbles.appendChild(bubble);
+  playBubbleBloop(bubbleType);
 }
 
 function initTrackerLobsterSwarm() {
@@ -749,7 +755,10 @@ function initTrackerAudio() {
   trackerAudioHooked = true;
 
   const unlock = () => {
-    enableTrackerAudio(true).catch(() => {
+    if (trackerAudioEnabled || !shouldAutoEnableTrackerAudio()) {
+      return;
+    }
+    enableTrackerAudio(false).catch(() => {
       // retry on next gesture
       trackerAudioEnabled = false;
     });
@@ -759,15 +768,13 @@ function initTrackerAudio() {
   window.addEventListener('keydown', unlock, { passive: true });
   window.addEventListener('touchstart', unlock, { passive: true });
 
-  const optedRaw = localStorage.getItem(AUDIO_OPT_IN_KEY);
-  const optedIn = optedRaw === null ? true : optedRaw === '1';
+  const optedIn = shouldAutoEnableTrackerAudio();
   if (optedIn) {
     enableTrackerAudio(false).catch(() => {
       // gesture may still be required
     });
-  } else if (el.trackerAudioToggle) {
-    el.trackerAudioToggle.textContent = 'Enable Reef Audio';
-    el.trackerAudioToggle.classList.remove('active');
+  } else {
+    updateTrackerAudioButton(false);
   }
 }
 
@@ -799,11 +806,37 @@ async function enableTrackerAudio(fromExplicitClick = false) {
     if (fromExplicitClick || localStorage.getItem(AUDIO_OPT_IN_KEY) === null) {
       localStorage.setItem(AUDIO_OPT_IN_KEY, '1');
     }
-    if (el.trackerAudioToggle) {
-      el.trackerAudioToggle.textContent = 'Reef Audio On';
-      el.trackerAudioToggle.classList.add('active');
-    }
-  } else if (el.trackerAudioToggle) {
+    updateTrackerAudioButton(true);
+  } else {
+    updateTrackerAudioButton(false);
+  }
+}
+
+function disableTrackerAudio(fromExplicitClick = false) {
+  trackerAudioEnabled = false;
+  stopTrackerMusic();
+  if (trackerAudioCtx && trackerAudioCtx.state === 'running') {
+    trackerAudioCtx.suspend().catch(() => {
+      // best effort
+    });
+  }
+  if (fromExplicitClick) {
+    localStorage.setItem(AUDIO_OPT_IN_KEY, '0');
+  }
+  updateTrackerAudioButton(false);
+}
+
+function shouldAutoEnableTrackerAudio() {
+  const optedRaw = localStorage.getItem(AUDIO_OPT_IN_KEY);
+  return optedRaw === null ? true : optedRaw === '1';
+}
+
+function updateTrackerAudioButton(enabled) {
+  if (!el.trackerAudioToggle) return;
+  if (enabled) {
+    el.trackerAudioToggle.textContent = 'Reef Audio On (tap to mute)';
+    el.trackerAudioToggle.classList.add('active');
+  } else {
     el.trackerAudioToggle.textContent = 'Enable Reef Audio';
     el.trackerAudioToggle.classList.remove('active');
   }
@@ -840,6 +873,13 @@ function startTrackerMusic() {
     }
     idx += 1;
   }, 250);
+}
+
+function stopTrackerMusic() {
+  if (trackerMusicTimer) {
+    clearInterval(trackerMusicTimer);
+    trackerMusicTimer = null;
+  }
 }
 
 function playTone(freq, startTime, duration, gainValue, type) {
@@ -911,6 +951,53 @@ function playCrusherSound() {
   crackGain.connect(trackerAudioMaster);
   crack.start(now + 0.04);
   crack.stop(now + 0.18);
+}
+
+function playBubbleBloop(bubbleType = 0) {
+  if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) return;
+  const now = trackerAudioCtx.currentTime;
+  const highTone = bubbleType === 1;
+  const base = highTone ? randomInt(720, 980) : randomInt(360, 510);
+  const peakGain = highTone ? 0.2 : 0.165;
+  const duration = highTone ? 0.18 : 0.24;
+
+  const osc = trackerAudioCtx.createOscillator();
+  const gain = trackerAudioCtx.createGain();
+  const filter = trackerAudioCtx.createBiquadFilter();
+
+  osc.type = highTone ? 'sine' : 'triangle';
+  osc.frequency.setValueAtTime(base * 1.28, now);
+  osc.frequency.exponentialRampToValueAtTime(base, now + duration * 0.45);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.72, now + duration);
+
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(highTone ? 3300 : 2300, now);
+  filter.Q.setValueAtTime(0.86, now);
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(peakGain, now + 0.018);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(trackerAudioMaster);
+  osc.start(now);
+  osc.stop(now + duration + 0.03);
+
+  if (!highTone) {
+    const subOsc = trackerAudioCtx.createOscillator();
+    const subGain = trackerAudioCtx.createGain();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(base * 0.52, now + 0.01);
+    subOsc.frequency.exponentialRampToValueAtTime(base * 0.38, now + duration + 0.02);
+    subGain.gain.setValueAtTime(0.0001, now + 0.01);
+    subGain.gain.linearRampToValueAtTime(0.085, now + 0.03);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.03);
+    subOsc.connect(subGain);
+    subGain.connect(trackerAudioMaster);
+    subOsc.start(now + 0.01);
+    subOsc.stop(now + duration + 0.05);
+  }
 }
 
 function onSubscribe(event) {
