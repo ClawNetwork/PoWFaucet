@@ -88,6 +88,7 @@ let trackerMaxClaimWei = 0n;
 let trackerPollTimer = null;
 let trackerAudioCtx = null;
 let trackerAudioMaster = null;
+let trackerAudioCompressor = null;
 let trackerAudioEnabled = false;
 let trackerMusicTimer = null;
 let trackerAudioHooked = false;
@@ -748,7 +749,7 @@ function initTrackerAudio() {
   trackerAudioHooked = true;
 
   const unlock = () => {
-    enableTrackerAudio().catch(() => {
+    enableTrackerAudio(true).catch(() => {
       // retry on next gesture
       trackerAudioEnabled = false;
     });
@@ -758,7 +759,8 @@ function initTrackerAudio() {
   window.addEventListener('keydown', unlock, { passive: true });
   window.addEventListener('touchstart', unlock, { passive: true });
 
-  const optedIn = localStorage.getItem(AUDIO_OPT_IN_KEY) === '1';
+  const optedRaw = localStorage.getItem(AUDIO_OPT_IN_KEY);
+  const optedIn = optedRaw === null ? true : optedRaw === '1';
   if (optedIn) {
     enableTrackerAudio(false).catch(() => {
       // gesture may still be required
@@ -775,9 +777,16 @@ async function enableTrackerAudio(fromExplicitClick = false) {
 
   if (!trackerAudioCtx) {
     trackerAudioCtx = new AudioCtx();
+    trackerAudioCompressor = trackerAudioCtx.createDynamicsCompressor();
     trackerAudioMaster = trackerAudioCtx.createGain();
-    trackerAudioMaster.gain.value = 0.07;
-    trackerAudioMaster.connect(trackerAudioCtx.destination);
+    trackerAudioMaster.gain.value = 0.24;
+    trackerAudioCompressor.threshold.setValueAtTime(-24, trackerAudioCtx.currentTime);
+    trackerAudioCompressor.knee.setValueAtTime(22, trackerAudioCtx.currentTime);
+    trackerAudioCompressor.ratio.setValueAtTime(3.2, trackerAudioCtx.currentTime);
+    trackerAudioCompressor.attack.setValueAtTime(0.004, trackerAudioCtx.currentTime);
+    trackerAudioCompressor.release.setValueAtTime(0.18, trackerAudioCtx.currentTime);
+    trackerAudioMaster.connect(trackerAudioCompressor);
+    trackerAudioCompressor.connect(trackerAudioCtx.destination);
   }
 
   if (trackerAudioCtx.state === 'suspended') {
@@ -787,7 +796,7 @@ async function enableTrackerAudio(fromExplicitClick = false) {
   trackerAudioEnabled = trackerAudioCtx.state === 'running';
   if (trackerAudioEnabled) {
     startTrackerMusic();
-    if (fromExplicitClick) {
+    if (fromExplicitClick || localStorage.getItem(AUDIO_OPT_IN_KEY) === null) {
       localStorage.setItem(AUDIO_OPT_IN_KEY, '1');
     }
     if (el.trackerAudioToggle) {
@@ -819,15 +828,15 @@ function startTrackerMusic() {
     const now = trackerAudioCtx.currentTime;
     const leadFreq = lead[idx % lead.length];
     const bassFreq = bass[idx % bass.length];
-    playTone(leadFreq, now, 0.2, 0.03, 'square');
-    playTone(bassFreq, now, 0.28, 0.015, 'triangle');
+    playTone(leadFreq, now, 0.2, 0.084, 'square');
+    playTone(bassFreq, now, 0.28, 0.052, 'triangle');
     if (idx % 4 === 2) {
-      playTone(leadFreq * 1.5, now + 0.05, 0.12, 0.018, 'sine');
+      playTone(leadFreq * 1.5, now + 0.05, 0.12, 0.045, 'sine');
     }
     if (idx % 8 === 0) {
       const sparkleFreq = sparkle[randomInt(0, sparkle.length - 1)];
-      playTone(sparkleFreq, now + 0.02, 0.08, 0.012, 'sine');
-      playTone(sparkleFreq * 0.5, now + 0.09, 0.08, 0.009, 'sine');
+      playTone(sparkleFreq, now + 0.02, 0.08, 0.032, 'sine');
+      playTone(sparkleFreq * 0.5, now + 0.09, 0.08, 0.026, 'sine');
     }
     idx += 1;
   }, 250);
@@ -858,7 +867,7 @@ function playCrusherSound() {
   bodyOsc.frequency.setValueAtTime(640, now);
   bodyOsc.frequency.exponentialRampToValueAtTime(120, now + 0.2);
   bodyGain.gain.setValueAtTime(0.0001, now);
-  bodyGain.gain.linearRampToValueAtTime(0.24, now + 0.01);
+  bodyGain.gain.linearRampToValueAtTime(0.46, now + 0.01);
   bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.21);
   bodyOsc.connect(bodyGain);
   bodyGain.connect(trackerAudioMaster);
@@ -882,7 +891,7 @@ function playCrusherSound() {
   noiseFilter.frequency.setValueAtTime(1550, now);
   noiseFilter.Q.value = 0.72;
   noiseGain.gain.setValueAtTime(0.0001, now);
-  noiseGain.gain.linearRampToValueAtTime(0.12, now + 0.012);
+  noiseGain.gain.linearRampToValueAtTime(0.26, now + 0.012);
   noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
   noise.connect(noiseFilter);
   noiseFilter.connect(noiseGain);
@@ -896,7 +905,7 @@ function playCrusherSound() {
   crack.frequency.setValueAtTime(190, now + 0.04);
   crack.frequency.exponentialRampToValueAtTime(82, now + 0.14);
   crackGain.gain.setValueAtTime(0.0001, now + 0.04);
-  crackGain.gain.linearRampToValueAtTime(0.13, now + 0.06);
+  crackGain.gain.linearRampToValueAtTime(0.3, now + 0.06);
   crackGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
   crack.connect(crackGain);
   crackGain.connect(trackerAudioMaster);
