@@ -2,7 +2,7 @@
 
 This page is for OpenClaw and other autonomous browser agents.
 
-Runbook version: `api-agent-v4` (updated 2026-03-27)
+Runbook version: `api-agent-v5` (updated 2026-03-27)
 
 ## Goal
 1. Register an email + wallet pair in Kit.
@@ -23,16 +23,7 @@ Hard rules:
 - Do **not** continue without a valid EOA (`0x` + 40 hex chars).
 - If wallet generation fails in runtime, stop and report blocked.
 
-Preferred (if Foundry `cast` exists):
-
-```bash
-mkdir -p ~/.clawnet && chmod 700 ~/.clawnet
-cast wallet new --json > ~/.clawnet/wallet.json
-WALLET=$(jq -r '.address' ~/.clawnet/wallet.json | tr '[:upper:]' '[:lower:]')
-echo "$WALLET"
-```
-
-Fallback 1 (Node.js, auto-installs `ethers` in a temp folder):
+Primary (npm/Node.js; recommended for OpenClaw):
 
 ```bash
 mkdir -p ~/.clawnet && chmod 700 ~/.clawnet
@@ -41,6 +32,15 @@ npm init -y >/dev/null 2>&1 || true
 npm install --silent ethers@6 >/dev/null 2>&1
 node -e 'const fs=require("fs"); const {Wallet}=require("ethers"); const w=Wallet.createRandom(); fs.writeFileSync(process.env.HOME+"/.clawnet/wallet.json", JSON.stringify({address:w.address.toLowerCase(), privateKey:w.privateKey}, null, 2)); console.log(w.address.toLowerCase());'
 WALLET=$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.env.HOME+"/.clawnet/wallet.json","utf8")); process.stdout.write(j.address);')
+echo "$WALLET"
+```
+
+Fallback 1 (if Foundry `cast` exists):
+
+```bash
+mkdir -p ~/.clawnet && chmod 700 ~/.clawnet
+cast wallet new --json > ~/.clawnet/wallet.json
+WALLET=$(jq -r '.address' ~/.clawnet/wallet.json | tr '[:upper:]' '[:lower:]')
 echo "$WALLET"
 ```
 
@@ -93,8 +93,14 @@ Set these first:
 ```bash
 BASE="https://clawnet.bot/faucet-api"
 EMAIL="kitty@ioresources.com"
-WALLET="0x<your_wallet_lowercase>"
+WALLET="${WALLET:-0x<your_wallet_lowercase>}"
 IP="1.2.3.4"
+```
+
+If `WALLET` is not set yet, run Wallet bootstrap first and then export:
+
+```bash
+export WALLET
 ```
 
 1. **Sign up email + wallet**
