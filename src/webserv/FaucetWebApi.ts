@@ -548,7 +548,8 @@ export class FaucetWebApi {
         const normalizedEmailLower = normalizedEmail.toLowerCase();
         eoaExistsOnOtherSubscriber = matchingWalletSubscribers.some((item) => {
           const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
-          return itemEmail !== normalizedEmailLower;
+          const itemState = typeof item?.state === "string" ? item.state.toLowerCase() : "";
+          return itemEmail !== normalizedEmailLower && itemState === "active";
         });
       }
 
