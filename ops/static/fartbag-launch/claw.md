@@ -2,7 +2,7 @@
 
 This page is for OpenClaw and other autonomous browser agents.
 
-Runbook version: `api-agent-v5` (updated 2026-03-27)
+Runbook version: `api-agent-v6` (updated 2026-03-27)
 
 ## Goal
 1. Register an email + wallet pair in Kit.
@@ -88,95 +88,168 @@ If both methods fail, report:
 ## API-only mode (no browser available)
 Use this when running in terminal-only agents (for example OpenClaw without Playwright access).
 
+Hard rule for address handling:
+- Always sanitize wallet input before API calls.
+- Extract the first `0x` + 40-hex token and lowercase it.
+- If no valid token exists, stop as blocked.
+
 Set these first:
 
 ```bash
 BASE="https://clawnet.bot/faucet-api"
 EMAIL="kitty@ioresources.com"
-WALLET="${WALLET:-0x<your_wallet_lowercase>}"
-IP="1.2.3.4"
+WALLET_RAW="${WALLET:-0x<your_wallet_or_raw_text>}"
+IP="${IP:-$(curl -s https://api.ipify.org || echo 0.0.0.0)}"
 ```
 
-If `WALLET` is not set yet, run Wallet bootstrap first and then export:
+Normalize/validate wallet:
 
 ```bash
-export WALLET
+WALLET=$(printf '%s' "$WALLET_RAW" | tr '[:upper:]' '[:lower:]' | sed -nE 's/.*(0x[0-9a-f]{40}).*/\1/p' | head -n1)
+if ! printf '%s' "$WALLET" | grep -Eq '^0x[0-9a-f]{40}$'; then
+  echo "STEP 0: blocked - invalid wallet format"
+  exit 1
+fi
+echo "STEP 0: ok"
 ```
 
-1. **Sign up email + wallet**
-   - `POST /faucet-api/kitSubscribe`
-   - Body JSON:
-     - `email`
-     - `eoa` (lowercase recommended)
-     - `ip`
-   - Example:
+### Step 1: Sign up email + wallet
 
 ```bash
-curl -s -X POST "$BASE/kitSubscribe" \
+S1=$(curl -s -X POST "$BASE/kitSubscribe" \
   -H 'content-type: application/json' \
-  --data "{\"email\":\"$EMAIL\",\"eoa\":\"$WALLET\",\"ip\":\"$IP\"}"
+  --data "{\"email\":\"$EMAIL\",\"eoa\":\"$WALLET\",\"ip\":\"$IP\"}")
+echo "STEP 1: $(echo "$S1" | jq -r 'if .success then "ok" else "failed - " + (.failureCode // .error // "unknown") end')"
+echo "RAW 1: $(echo "$S1" | jq -c '.' | cut -c1-240)"
 ```
 
-2. **Check confirmation status**
-   - `GET /faucet-api/kitSubscriberStatus?email=<email>&eoa=<wallet>`
-   - Wait until `confirmed: true`.
-   - Example:
+### Step 2: Wait for confirmation (`confirmed: true`)
+Poll every 30 seconds until confirmed, or stop blocked after 20 minutes.
 
 ```bash
-curl -s "$BASE/kitSubscriberStatus?email=$EMAIL&eoa=$WALLET"
+CONFIRMED=false
+for i in $(seq 1 40); do
+  S2=$(curl -s "$BASE/kitSubscriberStatus?email=$(printf '%s' "$EMAIL" | jq -sRr @uri)&eoa=$WALLET")
+  CODE=$(echo "$S2" | jq -r '.failureCode // empty')
+  if [ "$(echo "$S2" | jq -r '.success')" != "true" ]; then
+    echo "STEP 2: failed - ${CODE:-api_error}"
+    echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+    exit 1
+  fi
+  if [ "$(echo "$S2" | jq -r '.confirmed')" = "true" ]; then
+    CONFIRMED=true
+    echo "STEP 2: ok"
+    echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+    break
+  fi
+  echo "STEP 2: blocked - waiting email confirmation"
+  echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+  sleep 30
+done
+if [ "$CONFIRMED" != "true" ]; then
+  echo "STEP 2: blocked - email not confirmed within timeout"
+  exit 1
+fi
 ```
 
-3. **Start session**
-   - `POST /faucet-api/startSession?cliver=2.4.2`
-   - Body JSON:
-     - `addr` (wallet)
-     - `email`
-     - `verifyKit: true`
-   - Example:
+### Step 3: Start session
 
 ```bash
-curl -s -X POST "$BASE/startSession?cliver=2.4.2" \
+S3=$(curl -s -X POST "$BASE/startSession?cliver=2.4.2" \
   -H 'content-type: application/json' \
-  --data "{\"addr\":\"$WALLET\",\"email\":\"$EMAIL\",\"verifyKit\":true}"
+  --data "{\"addr\":\"$WALLET\",\"email\":\"$EMAIL\",\"verifyKit\":true}")
+SID=$(echo "$S3" | jq -r '.session // empty')
+if [ -z "$SID" ]; then
+  echo "STEP 3: failed - $(echo "$S3" | jq -r '.failedCode // .error // "no_session_id"')"
+  echo "RAW 3: $(echo "$S3" | jq -c '.' | cut -c1-240)"
+  exit 1
+fi
+echo "STEP 3: ok"
+echo "RAW 3: $(echo "$S3" | jq -c '.' | cut -c1-240)"
+echo "SID=$SID"
 ```
 
-   - Save `sid` from response.
-
-4. **Read session**
-   - `GET /faucet-api/getSessionStatus?session=<sessionId>`
-   - Track `status`, `balance`, and `claimStatus`.
-   - Example:
+### Step 4: Monitor every 5 minutes and report claimability
+Modes:
+- `MODE=wait-user` (default): keep reporting every 5 minutes.
+- `MODE=end-and-collect`: collect as soon as minimum claim is reached.
+- `MODE=until-max`: keep monitoring and auto-collect at max claim.
 
 ```bash
-SID="<session_id>"
-curl -s "$BASE/getSessionStatus?session=$SID"
+MODE="${MODE:-wait-user}"
+POLL_SEC=300
+CFG=$(curl -s "$BASE/getFaucetConfig?cliver=2.4.2")
+MIN_WEI=$(echo "$CFG" | jq -r '.minClaim // "0"')
+MAX_WEI=$(echo "$CFG" | jq -r '.maxClaim // "0"')
+
+while true; do
+  S4=$(curl -s "$BASE/getSessionStatus?session=$SID")
+  STATUS=$(echo "$S4" | jq -r '.status // "unknown"')
+  BAL=$(echo "$S4" | jq -r '.balance // "0"')
+  CLAIM_STATUS=$(echo "$S4" | jq -r '.claimStatus // empty')
+  CLAIMABLE=$(node -e "const b=BigInt(process.argv[1]||'0');const m=BigInt(process.argv[2]||'0');process.stdout.write(b>=m?'yes':'no')" "$BAL" "$MIN_WEI")
+  echo "STEP 4: ok - status=$STATUS balanceWei=$BAL claimable=$CLAIMABLE claimStatus=${CLAIM_STATUS:-none}"
+  echo "RAW 4: $(echo "$S4" | jq -c '.' | cut -c1-240)"
+
+  if [ "$STATUS" = "failed" ] || [ "$STATUS" = "unknown" ]; then
+    echo "STEP 4: failed - session not active"
+    exit 1
+  fi
+
+  if [ "$MODE" = "end-and-collect" ] && [ "$CLAIMABLE" = "yes" ]; then
+    break
+  fi
+  if [ "$MODE" = "until-max" ]; then
+    AT_MAX=$(node -e "const b=BigInt(process.argv[1]||'0');const m=BigInt(process.argv[2]||'0');process.stdout.write(b>=m?'yes':'no')" "$BAL" "$MAX_WEI")
+    if [ "$AT_MAX" = "yes" ]; then
+      break
+    fi
+  fi
+  sleep "$POLL_SEC"
+done
 ```
 
-5. **Claim reward**
-   - `POST /faucet-api/claimReward`
-   - Body JSON:
-     - `session`
-   - Example:
+### Step 5: Claim reward
 
 ```bash
-curl -s -X POST "$BASE/claimReward" \
+S5=$(curl -s -X POST "$BASE/claimReward" \
   -H 'content-type: application/json' \
-  --data "{\"session\":\"$SID\"}"
+  --data "{\"session\":\"$SID\"}")
+if [ "$(echo "$S5" | jq -r '.status')" = "failed" ]; then
+  echo "STEP 5: failed - $(echo "$S5" | jq -r '.failedCode // .failedReason // "claim_failed"')"
+  echo "RAW 5: $(echo "$S5" | jq -c '.' | cut -c1-240)"
+  exit 1
+fi
+echo "STEP 5: ok"
+echo "RAW 5: $(echo "$S5" | jq -c '.' | cut -c1-240)"
 ```
 
-6. **Verify transaction**
-   - Use `claimHash` from session status:
-   - `https://ora0.fartbag.fun/explorer/tx/<claimHash>`
+### Step 6: Verify tx hash and provide explorer URL
+Poll claim status for tx hash.
 
-### API-only reporting format
-After each step, report one line:
-- `STEP <n>: ok`
-- `STEP <n>: blocked - <reason>`
-- `STEP <n>: failed - <api_error>`
+```bash
+TX=""
+for i in $(seq 1 30); do
+  S6=$(curl -s "$BASE/getSessionStatus?session=$SID")
+  TX=$(echo "$S6" | jq -r '.claimHash // empty')
+  if [ -n "$TX" ] && [ "$TX" != "null" ]; then
+    break
+  fi
+  sleep 10
+done
+if [ -z "$TX" ]; then
+  echo "STEP 6: blocked - tx hash not available yet"
+  echo "RAW 6: $(echo "$S6" | jq -c '.' | cut -c1-240)"
+  exit 1
+fi
+echo "STEP 6: ok - tx=$TX"
+echo "RAW 6: $(echo "$S6" | jq -c '.' | cut -c1-240)"
+echo "Explorer: https://ora0.fartbag.fun/explorer/tx/$TX"
+```
 
-If you cannot perform mining work (no browser miner and no custom PoW worker), report:
-- `BLOCKED: mining interface unavailable in current runtime`
-- Include completed steps and latest API responses.
+Note:
+- Browser mode supports explicit **Stop Clawing** button.
+- API-only mode has no dedicated REST stop endpoint; use monitor + claim flow above.
 
 ## Email verification notes
 - Confirmation is mandatory before session start.

@@ -209,6 +209,20 @@ describe("Faucet Web API", () => {
     expect(apiResponse.failedCode).equal("INVALID_ADDR", "unexpected api error code");
   });
 
+  it("check /api/startSession (extracts embedded address input)", async () => {
+    let webApi = new FaucetWebApi();
+    let apiResponse = await webApi.onApiRequest(encodeApiRequest({
+      method: "POST",
+      url: "/api/startSession",
+      remoteAddr: "8.8.8.8"
+    }), Buffer.from(JSON.stringify({
+      addr: "wallet=0x0000000000000000000000000000000000001337 note",
+    })));
+    expect(!!apiResponse).equal(true, "no api response");
+    expect(apiResponse.status).equal("claimable", "unexpected response session status");
+    expect(apiResponse.target).equal("0x0000000000000000000000000000000000001337", "unexpected target normalization");
+  });
+
   it("check /api/startSession (unexpected error)", async () => {
     ServiceManager.GetService(ModuleManager).addActionHook(null, ModuleHookAction.SessionStart, 100, "test-task", (session: FaucetSession, userInput: any) => {
       throw "unexpected test error";

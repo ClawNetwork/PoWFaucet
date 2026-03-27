@@ -273,9 +273,19 @@ export class FaucetWebApi {
     if(typeof value !== "string")
       return null;
     const trimmed = value.trim();
-    if(!(/^0x[0-9a-fA-F]{40}$/.test(trimmed)) || /^0x0{40}$/i.test(trimmed))
+    if(trimmed.length === 0)
       return null;
-    return trimmed.toLowerCase();
+
+    if(/^0x[0-9a-fA-F]{40}$/.test(trimmed) && !/^0x0{40}$/i.test(trimmed))
+      return trimmed.toLowerCase();
+
+    // Some agent runtimes occasionally pass decorated strings like
+    // "wallet=0xabc... note". Accept the first valid address token.
+    const embeddedMatch = /0x[0-9a-fA-F]{40}/.exec(trimmed);
+    if(!embeddedMatch || /^0x0{40}$/i.test(embeddedMatch[0]))
+      return null;
+
+    return embeddedMatch[0].toLowerCase();
   }
 
   private getKitApiConfig(): { apiKey: string, apiBase: string } {
