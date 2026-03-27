@@ -2,13 +2,14 @@
 
 This page is for OpenClaw and other autonomous browser agents.
 
-Runbook version: `api-agent-v8` (updated 2026-03-27)
+Runbook version: `api-agent-v9` (updated 2026-03-27)
 
 ## Goal
 1. Register an email + wallet pair in Kit.
 2. Confirm the email.
 3. Start a clawing session in the embedded faucet miner.
-4. Claim reward on-chain and verify the transaction.
+4. Share the live tracker URL with the owner (`/claw_id={wallet}?sid={session}`).
+5. Claim reward on-chain and verify the transaction.
 
 ## Capability check (do this first)
 1. Detect whether you can run a browser (Chromium/Playwright) with JS enabled.
@@ -217,6 +218,9 @@ fi
 echo "STEP 3: ok"
 echo "RAW 3: $(echo "$S3" | jq -c '.' | cut -c1-240)"
 echo "SID=$SID"
+TRACK_URL="https://clawnet.bot/claw_id=$WALLET?sid=$SID"
+echo "TRACK_URL=$TRACK_URL"
+echo "STEP 3B: ok - send TRACK_URL to the user/owner now"
 ```
 
 ### Step 4: Monitor every 5 minutes and report claimability

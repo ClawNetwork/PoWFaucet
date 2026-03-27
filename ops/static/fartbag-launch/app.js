@@ -9,16 +9,24 @@ const GET_ADDRESS_SELECTOR = '0x8cb84e18';
 const SIGNUP_EMAIL_KEY = 'claw_signed_up_email';
 const SIGNUP_STATE_KEY = 'claw_signed_up_state_v2';
 const CLIENT_IP_CACHE_KEY = 'claw_client_ip_v1';
+const LAST_SESSION_MAP_KEY = 'claw_last_session_by_wallet_v1';
 const LANDING_VERSION = '0.2.0';
 const LANDING_COMMIT = 'pending';
 const BUBBLE_IMAGES = ['./reef_bubble1.png', './reef_bubble2.png'];
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 860px)';
 const BUBBLE_SPAWN_MIN_MS = 2000;
 const BUBBLE_SPAWN_MAX_MS = 4000;
+const TRACKER_BUBBLE_SPAWN_MIN_MS = 450;
+const TRACKER_BUBBLE_SPAWN_MAX_MS = 1200;
 const MOBILE_MAX_VISIBLE_BUBBLES = 1;
 const DESKTOP_MIN_VISIBLE_BUBBLES = 2;
 const DESKTOP_MAX_VISIBLE_BUBBLES = 7;
+const TRACKER_MOBILE_MAX_VISIBLE_BUBBLES = 4;
+const TRACKER_DESKTOP_MIN_VISIBLE_BUBBLES = 12;
+const TRACKER_DESKTOP_MAX_VISIBLE_BUBBLES = 24;
 const LOBSTER_SWIM_START_DELAY_MS = 5000;
+const TRACKER_POLL_MS = 5000;
+const WEI_PER_CLAW = 1000000000000000000n;
 
 const el = {
   days: document.getElementById('days'),
@@ -49,6 +57,11 @@ const el = {
   reefBubbles: document.getElementById('reef-bubbles'),
   headerLobster: document.getElementById('header-lobster'),
   swimLobster: document.getElementById('swim-lobster'),
+  trackerView: document.getElementById('claw-tracker-view'),
+  trackerWallet: document.getElementById('tracker-wallet'),
+  trackerBalance: document.getElementById('tracker-balance'),
+  trackerStatus: document.getElementById('tracker-status'),
+  trackerSession: document.getElementById('tracker-session'),
 };
 
 let deriveTimer = null;
@@ -63,13 +76,34 @@ let lobsterMoveTimer = null;
 let lobsterDirection = 1;
 let lobsterCurrentX = 140;
 let lobsterCurrentY = 120;
+let trackerMode = false;
+let trackerWallet = '';
+let trackerSessionId = '';
+let trackerSessionLocked = false;
+let trackerBalanceWei = 0n;
+let trackerMinClaimWei = 0n;
+let trackerMaxClaimWei = 0n;
+let trackerPollTimer = null;
+let trackerAudioCtx = null;
+let trackerAudioMaster = null;
+let trackerAudioEnabled = false;
+let trackerMusicTimer = null;
+let trackerAudioHooked = false;
+const trackerSwimmers = [];
+const trackerSwimmerTimers = new Map();
 
 init();
 
 function init() {
-  startCountdown();
+  const trackerRoute = resolveTrackerRoute();
+  if (trackerRoute) {
+    enterTrackerMode(trackerRoute);
+  } else {
+    startCountdown();
+  }
   initReefBubbles();
   initLobsterSwim();
+  initTrackerLobsterSwarm();
   loadSignupState();
   hydrateClientIp();
   renderBuildMeta();
@@ -119,6 +153,71 @@ function init() {
       setStatus(el.faucetStatus, 'Back on the reef.', false);
     }
   });
+}
+
+function resolveTrackerRoute() {
+  let url;
+  try {
+    url = new URL(window.location.href);
+  } catch {
+    return null;
+  }
+
+  let rawWallet = '';
+  const pathMatch = decodeURIComponent(url.pathname || '').match(/\/claw_id=([^/?#]+)/i);
+  if (pathMatch && pathMatch[1]) {
+    rawWallet = pathMatch[1].trim();
+  }
+  if (!rawWallet) {
+    rawWallet = (url.searchParams.get('claw_id') || '').trim();
+  }
+  if (!rawWallet) {
+    return null;
+  }
+
+  const normalizedWallet = normalizeAddress(rawWallet);
+  if (!normalizedWallet) {
+    return null;
+  }
+
+  const sidRaw = (url.searchParams.get('sid') || '').trim();
+  const sid =
+    sidRaw && /^[0-9a-zA-Z-]{8,}$/.test(sidRaw)
+      ? sidRaw
+      : '';
+
+  return {
+    wallet: normalizedWallet,
+    sid,
+  };
+}
+
+function enterTrackerMode(route) {
+  trackerMode = true;
+  trackerWallet = route.wallet;
+  trackerSessionId = route.sid || getStoredSessionId(route.wallet) || '';
+  trackerSessionLocked = Boolean(route.sid);
+  document.body.classList.add('tracker-mode');
+  if (el.trackerView) {
+    el.trackerView.hidden = false;
+  }
+  if (el.trackerWallet) {
+    el.trackerWallet.textContent = trackerWallet;
+  }
+  if (el.trackerBalance) {
+    el.trackerBalance.textContent = '0 CLAW';
+  }
+  if (el.trackerStatus) {
+    el.trackerStatus.textContent = 'minimum not reeched';
+  }
+  if (el.trackerSession) {
+    el.trackerSession.textContent = trackerSessionId
+      ? `Session: ${trackerSessionId}`
+      : 'Session: waiting...';
+  }
+
+  initTrackerAudio();
+  startTrackerPolling();
 }
 
 function startCountdown() {
@@ -260,10 +359,30 @@ function isMobileBubbleMode() {
   return bubbleMediaQuery ? bubbleMediaQuery.matches : window.innerWidth <= 860;
 }
 
+function getBubbleSpawnMinMs() {
+  return trackerMode ? TRACKER_BUBBLE_SPAWN_MIN_MS : BUBBLE_SPAWN_MIN_MS;
+}
+
+function getBubbleSpawnMaxMs() {
+  return trackerMode ? TRACKER_BUBBLE_SPAWN_MAX_MS : BUBBLE_SPAWN_MAX_MS;
+}
+
+function getMobileMaxVisibleBubbles() {
+  return trackerMode ? TRACKER_MOBILE_MAX_VISIBLE_BUBBLES : MOBILE_MAX_VISIBLE_BUBBLES;
+}
+
+function getDesktopMinVisibleBubbles() {
+  return trackerMode ? TRACKER_DESKTOP_MIN_VISIBLE_BUBBLES : DESKTOP_MIN_VISIBLE_BUBBLES;
+}
+
+function getDesktopMaxVisibleBubbles() {
+  return trackerMode ? TRACKER_DESKTOP_MAX_VISIBLE_BUBBLES : DESKTOP_MAX_VISIBLE_BUBBLES;
+}
+
 function seedBubbles() {
   const desired = isMobileBubbleMode()
-    ? MOBILE_MAX_VISIBLE_BUBBLES
-    : DESKTOP_MIN_VISIBLE_BUBBLES;
+    ? getMobileMaxVisibleBubbles()
+    : getDesktopMinVisibleBubbles();
   while (activeBubbles.size < desired) {
     spawnBubble();
   }
@@ -276,16 +395,16 @@ function scheduleNextBubbleTick() {
   bubbleSpawnTimer = window.setTimeout(() => {
     runBubbleTick();
     scheduleNextBubbleTick();
-  }, randomInt(BUBBLE_SPAWN_MIN_MS, BUBBLE_SPAWN_MAX_MS));
+  }, randomInt(getBubbleSpawnMinMs(), getBubbleSpawnMaxMs()));
 }
 
 function runBubbleTick() {
   if (!el.reefBubbles) return;
 
   if (isMobileBubbleMode()) {
-    if (activeBubbles.size < MOBILE_MAX_VISIBLE_BUBBLES) {
+    if (activeBubbles.size < getMobileMaxVisibleBubbles()) {
       spawnBubble();
-    } else if (activeBubbles.size > MOBILE_MAX_VISIBLE_BUBBLES) {
+    } else if (activeBubbles.size > getMobileMaxVisibleBubbles()) {
       enforceBubbleLimits();
     }
     return;
@@ -294,8 +413,8 @@ function runBubbleTick() {
   maintainBubbleFloor();
 
   const targetVisible = randomInt(
-    DESKTOP_MIN_VISIBLE_BUBBLES,
-    DESKTOP_MAX_VISIBLE_BUBBLES,
+    getDesktopMinVisibleBubbles(),
+    getDesktopMaxVisibleBubbles(),
   );
 
   if (activeBubbles.size < targetVisible) {
@@ -307,22 +426,22 @@ function runBubbleTick() {
     for (let i = 0; i < spawnCount; i += 1) {
       spawnBubble();
     }
-  } else if (activeBubbles.size > DESKTOP_MAX_VISIBLE_BUBBLES) {
+  } else if (activeBubbles.size > getDesktopMaxVisibleBubbles()) {
     enforceBubbleLimits();
   }
 }
 
 function maintainBubbleFloor() {
   if (isMobileBubbleMode()) return;
-  while (activeBubbles.size < DESKTOP_MIN_VISIBLE_BUBBLES) {
+  while (activeBubbles.size < getDesktopMinVisibleBubbles()) {
     spawnBubble();
   }
 }
 
 function enforceBubbleLimits() {
   const maxAllowed = isMobileBubbleMode()
-    ? MOBILE_MAX_VISIBLE_BUBBLES
-    : DESKTOP_MAX_VISIBLE_BUBBLES;
+    ? getMobileMaxVisibleBubbles()
+    : getDesktopMaxVisibleBubbles();
   if (activeBubbles.size <= maxAllowed) return;
   const overflow = activeBubbles.size - maxAllowed;
   const bubbles = [...activeBubbles];
@@ -336,10 +455,10 @@ function enforceBubbleLimits() {
 
 function spawnBubble() {
   if (!el.reefBubbles) return;
-  if (isMobileBubbleMode() && activeBubbles.size >= MOBILE_MAX_VISIBLE_BUBBLES) {
+  if (isMobileBubbleMode() && activeBubbles.size >= getMobileMaxVisibleBubbles()) {
     return;
   }
-  if (!isMobileBubbleMode() && activeBubbles.size >= DESKTOP_MAX_VISIBLE_BUBBLES) {
+  if (!isMobileBubbleMode() && activeBubbles.size >= getDesktopMaxVisibleBubbles()) {
     return;
   }
 
@@ -350,19 +469,23 @@ function spawnBubble() {
   bubble.decoding = 'async';
 
   const mobile = isMobileBubbleMode();
-  const size = mobile ? randomInt(60, 94) : randomInt(72, 136);
+  const size = trackerMode
+    ? (mobile ? randomInt(92, 174) : randomInt(120, 260))
+    : (mobile ? randomInt(60, 94) : randomInt(72, 136));
   const left = randomInt(8, 92);
-  const drift = randomInt(-60, 60);
+  const drift = trackerMode ? randomInt(-95, 95) : randomInt(-60, 60);
   const maxRise = Math.max(220, window.innerHeight - 80);
-  const rise = mobile
-    ? randomInt(Math.floor(maxRise * 0.58), Math.floor(maxRise * 0.9))
-    : randomInt(Math.floor(maxRise * 0.72), maxRise);
-  const baseDurationMs = mobile
-    ? randomInt(9000, 16500)
-    : randomInt(12000, 24000);
-  const fastLift = Math.random() < 0.3;
+  const rise = trackerMode
+    ? randomInt(Math.floor(maxRise * 0.82), Math.floor(maxRise * 1.08))
+    : (mobile
+      ? randomInt(Math.floor(maxRise * 0.58), Math.floor(maxRise * 0.9))
+      : randomInt(Math.floor(maxRise * 0.72), maxRise));
+  const baseDurationMs = trackerMode
+    ? (mobile ? randomInt(11000, 24000) : randomInt(14500, 34000))
+    : (mobile ? randomInt(9000, 16500) : randomInt(12000, 24000));
+  const fastLift = Math.random() < (trackerMode ? 0.18 : 0.3);
   const durationMs = fastLift
-    ? Math.max(3200, Math.floor(baseDurationMs * 0.7))
+    ? Math.max(3200, Math.floor(baseDurationMs * (trackerMode ? 0.78 : 0.7)))
     : baseDurationMs;
 
   bubble.style.left = `${left}%`;
@@ -383,6 +506,375 @@ function spawnBubble() {
   bubble.addEventListener('animationend', handleDone);
   activeBubbles.add(bubble);
   el.reefBubbles.appendChild(bubble);
+}
+
+function initTrackerLobsterSwarm() {
+  if (!trackerMode) return;
+  if (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    return;
+  }
+
+  const count = window.innerWidth <= 860 ? 2 : 4;
+  for (let i = 0; i < count; i += 1) {
+    const swimmer = document.createElement('img');
+    swimmer.className = 'tracker-swimmer';
+    swimmer.src = './larry_lobster_logo.png';
+    swimmer.alt = '';
+    swimmer.decoding = 'async';
+    const scale = randomInt(68, 180) / 100;
+    swimmer.dataset.scale = String(scale);
+    swimmer.dataset.x = String(randomInt(80, Math.max(100, window.innerWidth - 80)));
+    swimmer.dataset.y = String(
+      randomInt(140, Math.max(180, window.innerHeight - 220)),
+    );
+    swimmer.dataset.dir = Math.random() > 0.5 ? '1' : '-1';
+    document.body.appendChild(swimmer);
+    trackerSwimmers.push(swimmer);
+    scheduleSwimmerMove(swimmer, 220 + i * 120);
+  }
+}
+
+function scheduleSwimmerMove(swimmer, delayMs = 0) {
+  const timer = window.setTimeout(() => {
+    moveTrackerSwimmer(swimmer);
+  }, Math.max(0, delayMs));
+  trackerSwimmerTimers.set(swimmer, timer);
+}
+
+function moveTrackerSwimmer(swimmer) {
+  if (!swimmer || !trackerMode) return;
+  const minX = 56;
+  const maxX = Math.max(minX + 1, window.innerWidth - 56);
+  const minY = 120;
+  const maxY = Math.max(minY + 1, window.innerHeight - 170);
+
+  const currentX = Number(swimmer.dataset.x || randomInt(minX, maxX));
+  const targetX = randomInt(minX, maxX);
+  const targetY = randomInt(minY, maxY);
+  const scale = Number(swimmer.dataset.scale || 1);
+  const headingRight = targetX >= currentX;
+  const direction = headingRight ? 1 : -1;
+  const durationMs = randomInt(3600, 7800);
+
+  swimmer.dataset.x = String(targetX);
+  swimmer.dataset.y = String(targetY);
+  swimmer.dataset.dir = String(direction);
+  swimmer.style.transitionDuration = `${durationMs}ms, ${durationMs}ms, 420ms`;
+  swimmer.style.left = `${targetX}px`;
+  swimmer.style.top = `${targetY}px`;
+  swimmer.style.transform = `translate(-50%, -50%) scale(${scale}) scaleX(${direction})`;
+
+  scheduleSwimmerMove(swimmer, durationMs + randomInt(260, 1200));
+}
+
+function startTrackerPolling() {
+  if (!trackerMode || !trackerWallet) return;
+  refreshTrackerConfig().catch(() => {
+    trackerMinClaimWei = 0n;
+    trackerMaxClaimWei = 0n;
+  });
+  refreshTrackerData().catch(() => {
+    // handled by fallback text
+  });
+  if (trackerPollTimer) {
+    clearInterval(trackerPollTimer);
+  }
+  trackerPollTimer = window.setInterval(() => {
+    refreshTrackerData().catch(() => {
+      // best-effort updates
+    });
+  }, TRACKER_POLL_MS);
+}
+
+async function refreshTrackerConfig() {
+  const response = await fetch(
+    `${FAUCET_API_BASE}/getFaucetConfig?cliver=${encodeURIComponent(FAUCET_CLIENT_VERSION)}`,
+  );
+  if (!response.ok) return;
+  const data = await response.json().catch(() => null);
+  if (!data || typeof data !== 'object') return;
+  trackerMinClaimWei = toBigInt(data.minClaim);
+  trackerMaxClaimWei = toBigInt(data.maxClaim);
+}
+
+async function refreshTrackerData() {
+  if (!trackerMode || !trackerWallet) return;
+
+  let balanceWei = 0n;
+  let status = 'unknown';
+  let displaySessionId = trackerSessionId;
+
+  if (trackerSessionId && trackerSessionLocked) {
+    const response = await fetch(
+      `${FAUCET_API_BASE}/getSessionStatus?session=${encodeURIComponent(trackerSessionId)}`,
+    );
+    if (response.ok) {
+      const data = await response.json().catch(() => null);
+      if (data && typeof data === 'object') {
+        balanceWei = toBigInt(data.balance);
+        status = String(data.status || 'unknown');
+      }
+    }
+  } else {
+    const response = await fetch(`${FAUCET_API_BASE}/getFaucetStatus`);
+    if (response.ok) {
+      const data = await response.json().catch(() => null);
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      const latest = getLatestWalletSession(sessions, trackerWallet);
+      if (latest) {
+        balanceWei = toBigInt(latest.balance);
+        status = String(latest.status || 'unknown');
+        displaySessionId = String(latest.id || '');
+        trackerSessionId = displaySessionId || trackerSessionId;
+        if (displaySessionId) {
+          storeSessionId(trackerWallet, displaySessionId);
+        }
+      }
+    }
+  }
+
+  updateTrackerCounter(balanceWei);
+  updateTrackerThresholdLabel(balanceWei);
+
+  if (el.trackerSession) {
+    if (displaySessionId) {
+      el.trackerSession.textContent = `Session: ${displaySessionId} (${status})`;
+    } else {
+      el.trackerSession.textContent = 'Session: waiting...';
+    }
+  }
+}
+
+function getLatestWalletSession(sessions, wallet) {
+  if (!Array.isArray(sessions) || !wallet) return null;
+  const matches = sessions
+    .filter((session) => normalizeAddress(String(session?.target || '')) === wallet)
+    .sort((a, b) => Number(b?.start || 0) - Number(a?.start || 0));
+  return matches.length > 0 ? matches[0] : null;
+}
+
+function updateTrackerCounter(nextBalanceWei) {
+  const safeNext = nextBalanceWei > 0n ? nextBalanceWei : 0n;
+  if (safeNext > trackerBalanceWei) {
+    playCrusherSound();
+  }
+  trackerBalanceWei = safeNext;
+  if (el.trackerBalance) {
+    el.trackerBalance.textContent = `${formatClawAmount(safeNext)} CLAW`;
+  }
+}
+
+function updateTrackerThresholdLabel(balanceWei) {
+  if (!el.trackerStatus) return;
+  if (trackerMaxClaimWei > 0n && balanceWei >= trackerMaxClaimWei) {
+    el.trackerStatus.textContent = 'maximim reached remind your OpenClaw to collect';
+    return;
+  }
+  if (trackerMinClaimWei > 0n && balanceWei >= trackerMinClaimWei) {
+    el.trackerStatus.textContent = 'minimum reach';
+    return;
+  }
+  el.trackerStatus.textContent = 'minimum not reeched';
+}
+
+function formatClawAmount(weiValue) {
+  const safe = weiValue > 0n ? weiValue : 0n;
+  const whole = safe / WEI_PER_CLAW;
+  const fraction = safe % WEI_PER_CLAW;
+  const wholeText = addCommas(whole.toString());
+  let frac = fraction.toString().padStart(18, '0').slice(0, 3);
+  frac = frac.replace(/0+$/, '');
+  return frac ? `${wholeText}.${frac}` : wholeText;
+}
+
+function addCommas(numberText) {
+  return numberText.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function toBigInt(value) {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return BigInt(Math.floor(value));
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^[0-9]+$/.test(trimmed)) {
+      try {
+        return BigInt(trimmed);
+      } catch {
+        return 0n;
+      }
+    }
+  }
+  return 0n;
+}
+
+function storeSessionId(wallet, sessionId) {
+  if (!wallet || !sessionId) return;
+  const map = safeJsonParseObject(localStorage.getItem(LAST_SESSION_MAP_KEY)) || {};
+  map[wallet.toLowerCase()] = String(sessionId);
+  localStorage.setItem(LAST_SESSION_MAP_KEY, JSON.stringify(map));
+}
+
+function getStoredSessionId(wallet) {
+  if (!wallet) return '';
+  const map = safeJsonParseObject(localStorage.getItem(LAST_SESSION_MAP_KEY));
+  if (!map) return '';
+  const sid = map[wallet.toLowerCase()];
+  return typeof sid === 'string' ? sid : '';
+}
+
+function buildTrackerUrl(wallet, sessionId = '') {
+  const base = `${window.location.origin}/claw_id=${wallet}`;
+  if (!sessionId) return base;
+  return `${base}?sid=${encodeURIComponent(sessionId)}`;
+}
+
+function initTrackerAudio() {
+  if (!trackerMode || trackerAudioHooked) return;
+  trackerAudioHooked = true;
+
+  const unlock = () => {
+    enableTrackerAudio().catch(() => {
+      // retry on next gesture
+      trackerAudioEnabled = false;
+    });
+  };
+
+  window.addEventListener('pointerdown', unlock, { passive: true });
+  window.addEventListener('keydown', unlock, { passive: true });
+  window.addEventListener('touchstart', unlock, { passive: true });
+  enableTrackerAudio().catch(() => {
+    // user gesture may be required
+  });
+}
+
+async function enableTrackerAudio() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+
+  if (!trackerAudioCtx) {
+    trackerAudioCtx = new AudioCtx();
+    trackerAudioMaster = trackerAudioCtx.createGain();
+    trackerAudioMaster.gain.value = 0.07;
+    trackerAudioMaster.connect(trackerAudioCtx.destination);
+  }
+
+  if (trackerAudioCtx.state === 'suspended') {
+    await trackerAudioCtx.resume();
+  }
+
+  trackerAudioEnabled = trackerAudioCtx.state === 'running';
+  if (trackerAudioEnabled) {
+    startTrackerMusic();
+  }
+}
+
+function startTrackerMusic() {
+  if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) return;
+  if (trackerMusicTimer) return;
+  const lead = [
+    523.25, 659.25, 783.99, 659.25,
+    587.33, 523.25, 493.88, 440.0,
+    392.0, 440.0, 493.88, 523.25,
+    659.25, 523.25, 440.0, 392.0,
+  ];
+  const bass = [
+    130.81, 146.83, 164.81, 146.83,
+    130.81, 123.47, 110.0, 98.0,
+  ];
+  const sparkle = [1046.5, 987.77, 1174.66, 1318.51];
+  let idx = 0;
+  trackerMusicTimer = window.setInterval(() => {
+    const now = trackerAudioCtx.currentTime;
+    const leadFreq = lead[idx % lead.length];
+    const bassFreq = bass[idx % bass.length];
+    playTone(leadFreq, now, 0.2, 0.03, 'square');
+    playTone(bassFreq, now, 0.28, 0.015, 'triangle');
+    if (idx % 4 === 2) {
+      playTone(leadFreq * 1.5, now + 0.05, 0.12, 0.018, 'sine');
+    }
+    if (idx % 8 === 0) {
+      const sparkleFreq = sparkle[randomInt(0, sparkle.length - 1)];
+      playTone(sparkleFreq, now + 0.02, 0.08, 0.012, 'sine');
+      playTone(sparkleFreq * 0.5, now + 0.09, 0.08, 0.009, 'sine');
+    }
+    idx += 1;
+  }, 250);
+}
+
+function playTone(freq, startTime, duration, gainValue, type) {
+  if (!trackerAudioCtx || !trackerAudioMaster) return;
+  const osc = trackerAudioCtx.createOscillator();
+  const gain = trackerAudioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startTime);
+  gain.gain.setValueAtTime(0.0001, startTime);
+  gain.gain.linearRampToValueAtTime(gainValue, startTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+  osc.connect(gain);
+  gain.connect(trackerAudioMaster);
+  osc.start(startTime);
+  osc.stop(startTime + duration + 0.04);
+}
+
+function playCrusherSound() {
+  if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) return;
+  const now = trackerAudioCtx.currentTime;
+
+  const bodyOsc = trackerAudioCtx.createOscillator();
+  const bodyGain = trackerAudioCtx.createGain();
+  bodyOsc.type = 'triangle';
+  bodyOsc.frequency.setValueAtTime(640, now);
+  bodyOsc.frequency.exponentialRampToValueAtTime(120, now + 0.2);
+  bodyGain.gain.setValueAtTime(0.0001, now);
+  bodyGain.gain.linearRampToValueAtTime(0.24, now + 0.01);
+  bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.21);
+  bodyOsc.connect(bodyGain);
+  bodyGain.connect(trackerAudioMaster);
+  bodyOsc.start(now);
+  bodyOsc.stop(now + 0.22);
+
+  const noiseBuffer = trackerAudioCtx.createBuffer(
+    1,
+    Math.max(1, Math.floor(trackerAudioCtx.sampleRate * 0.2)),
+    trackerAudioCtx.sampleRate,
+  );
+  const noiseData = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < noiseData.length; i += 1) {
+    noiseData[i] = (Math.random() * 2 - 1) * (1 - i / noiseData.length);
+  }
+  const noise = trackerAudioCtx.createBufferSource();
+  const noiseFilter = trackerAudioCtx.createBiquadFilter();
+  const noiseGain = trackerAudioCtx.createGain();
+  noise.buffer = noiseBuffer;
+  noiseFilter.type = 'bandpass';
+  noiseFilter.frequency.setValueAtTime(1550, now);
+  noiseFilter.Q.value = 0.72;
+  noiseGain.gain.setValueAtTime(0.0001, now);
+  noiseGain.gain.linearRampToValueAtTime(0.12, now + 0.012);
+  noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(trackerAudioMaster);
+  noise.start(now);
+  noise.stop(now + 0.21);
+
+  const crack = trackerAudioCtx.createOscillator();
+  const crackGain = trackerAudioCtx.createGain();
+  crack.type = 'square';
+  crack.frequency.setValueAtTime(190, now + 0.04);
+  crack.frequency.exponentialRampToValueAtTime(82, now + 0.14);
+  crackGain.gain.setValueAtTime(0.0001, now + 0.04);
+  crackGain.gain.linearRampToValueAtTime(0.13, now + 0.06);
+  crackGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+  crack.connect(crackGain);
+  crackGain.connect(trackerAudioMaster);
+  crack.start(now + 0.04);
+  crack.stop(now + 0.18);
 }
 
 function onSubscribe(event) {
@@ -621,7 +1113,13 @@ async function onStartClawing(event) {
     const failedStatus = typeof data?.status === 'string' ? data.status.toLowerCase() : '';
 
     if (sessionId) {
-      setStatus(el.faucetStatus, 'Session created. Diving in...', false);
+      storeSessionId(owner, sessionId);
+      const trackerUrl = buildTrackerUrl(owner, sessionId);
+      setStatus(
+        el.faucetStatus,
+        `Session created. Diving in... Track at ${trackerUrl}`,
+        false,
+      );
       openModal(buildFaucetEmbedUrl(`/#/mine/${sessionId}`));
       return;
     }

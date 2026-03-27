@@ -68,6 +68,29 @@ body {
   opacity: 0.98;
 }
 
+.tracker-mode .reef-foreground {
+  height: clamp(132px, 18vw, 220px);
+  background-image:
+    url("./reef2.png"),
+    url("./reef2.png"),
+    url("./reef_coral.png"),
+    url("./reef2.png"),
+    url("./reef2.png");
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size:
+    clamp(260px, 22vw, 350px) auto,
+    clamp(240px, 18vw, 310px) auto,
+    clamp(140px, 12vw, 220px) auto,
+    clamp(240px, 18vw, 310px) auto,
+    clamp(260px, 22vw, 350px) auto;
+  background-position:
+    6% bottom,
+    30% bottom,
+    50% bottom,
+    70% bottom,
+    94% bottom;
+}
+
 .reef-bubbles {
   position: fixed;
   inset: 0;
@@ -75,6 +98,10 @@ body {
   pointer-events: none;
   z-index: 15;
   overflow: visible;
+}
+
+.tracker-mode .reef-bubbles {
+  z-index: 16;
 }
 
 .reef-bubble {
@@ -183,6 +210,23 @@ body {
   filter: drop-shadow(0 4px 10px rgba(255, 80, 80, 0.28));
 }
 
+.tracker-swimmer {
+  position: fixed;
+  left: -120px;
+  top: -120px;
+  width: clamp(64px, 10vw, 120px);
+  height: auto;
+  pointer-events: none;
+  z-index: 17;
+  opacity: 0.93;
+  transform: translate(-50%, -50%) scale(1) scaleX(1);
+  transition:
+    left 5.5s linear,
+    top 5.5s linear,
+    transform 420ms ease;
+  filter: drop-shadow(0 6px 18px rgba(255, 62, 62, 0.28));
+}
+
 .swim-lobster.active {
   opacity: 0.95;
 }
@@ -281,6 +325,98 @@ body {
 .panel p {
   margin: 0.4rem 0;
   color: var(--text);
+}
+
+.tracker-mode .countdown-card,
+.tracker-mode .subscribe-panel,
+.tracker-mode .faucet-panel {
+  display: none;
+}
+
+.tracker-panel {
+  position: relative;
+  display: grid;
+  gap: 0.9rem;
+  overflow: hidden;
+  background:
+    radial-gradient(60% 90% at 10% 0%, rgba(34, 121, 255, 0.18), transparent 70%),
+    radial-gradient(55% 80% at 90% 15%, rgba(0, 210, 255, 0.16), transparent 72%),
+    linear-gradient(180deg, rgba(6, 18, 44, 0.9), rgba(4, 12, 30, 0.95));
+}
+
+.tracker-panel::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: clamp(84px, 16vw, 150px);
+  pointer-events: none;
+  background-image:
+    url("./reef2.png"),
+    url("./reef_coral.png"),
+    url("./reef2.png");
+  background-repeat: no-repeat, no-repeat, no-repeat;
+  background-size:
+    clamp(180px, 24vw, 280px) auto,
+    clamp(84px, 11vw, 150px) auto,
+    clamp(180px, 24vw, 280px) auto;
+  background-position:
+    10% bottom,
+    50% bottom,
+    90% bottom;
+  opacity: 0.85;
+  filter: drop-shadow(0 -2px 10px rgba(255, 84, 84, 0.25));
+}
+
+.tracker-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.tracker-panel[hidden] {
+  display: none !important;
+}
+
+.tracker-wallet-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.96rem;
+}
+
+.tracker-wallet-line code {
+  color: #a9e8ff;
+  font-size: 0.98rem;
+  font-family: "Space Grotesk", monospace;
+}
+
+.tracker-counter-wrap {
+  border: 1px solid rgba(133, 185, 255, 0.4);
+  border-radius: 16px;
+  padding: 1rem;
+  padding-bottom: clamp(92px, 13vw, 140px);
+  background: rgba(4, 15, 38, 0.52);
+}
+
+.tracker-balance {
+  margin: 0;
+  font-family: "Orbitron", "Space Grotesk", sans-serif;
+  font-size: clamp(2.2rem, 7.8vw, 5.2rem);
+  line-height: 1;
+  letter-spacing: 0.06em;
+  color: #78f6d2;
+  text-shadow: 0 0 22px rgba(110, 246, 193, 0.3);
+}
+
+.tracker-status {
+  margin: 0.6rem 0 0;
+  font-size: clamp(1.05rem, 2.2vw, 1.4rem);
+  color: #ffd0c6;
+  font-weight: 700;
+}
+
+.tracker-session {
+  margin: 0.42rem 0 0;
+  color: #91a8d8;
+  font-size: 0.9rem;
 }
 
 /* Safety guard: if Kit script injects "Built with Kit", hide it entirely. */
@@ -544,6 +680,18 @@ button:disabled {
     opacity: 0.98;
   }
 
+  .tracker-mode .reef-foreground {
+    height: 112px;
+    background-image: url("./reef2.png"), url("./reef2.png");
+    background-repeat: no-repeat, no-repeat;
+    background-size:
+      min(42vw, 178px) auto,
+      min(42vw, 178px) auto;
+    background-position:
+      22% bottom,
+      78% bottom;
+  }
+
   .reef-bubbles {
     position: fixed;
     inset: 0;
@@ -553,6 +701,23 @@ button:disabled {
 
   .swim-lobster {
     width: clamp(64px, 18vw, 86px);
+  }
+
+  .tracker-swimmer {
+    width: clamp(56px, 19vw, 92px);
+  }
+
+  .tracker-panel::before {
+    height: 92px;
+    background-size:
+      min(39vw, 156px) auto,
+      min(20vw, 82px) auto,
+      min(39vw, 156px) auto;
+    background-position:
+      14% bottom,
+      50% bottom,
+      86% bottom;
+    opacity: 0.9;
   }
 
   .shell {
