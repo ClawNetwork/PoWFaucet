@@ -78,9 +78,7 @@ export interface IClientSessionStatus {
 
 export const FAUCETSTATUS_CACHE_TIME = 10;
 const KIT_SUBSCRIBERS_CACHE_TIME = 30;
-const KIT_SUBSCRIBE_ENDPOINT = (
-  process.env.KIT_SUBSCRIBE_ENDPOINT || "https://app.kit.com/forms/9238977/subscriptions"
-).trim();
+const KIT_FORM_ID = (process.env.KIT_FORM_ID || "9238977").trim();
 
 export class FaucetWebApi {
   private apiEndpoints: {[endpoint: string]: (req: IncomingMessage, url: IFaucetApiUrl, body: Buffer) => Promise<any>} = {};
@@ -286,6 +284,17 @@ export class FaucetWebApi {
     return { apiKey, apiBase };
   }
 
+  private getKitSubscribeConfig(): { apiKey: string, apiBase: string } {
+    const apiKey = (
+      process.env.KIT_V3_API_KEY ||
+      process.env.CONVERTKIT_V3_API_KEY ||
+      process.env.CONVERTKIT_API_KEY ||
+      ""
+    ).trim();
+    const apiBase = (process.env.KIT_V3_API_BASE_URL || "https://api.convertkit.com/v3").trim();
+    return { apiKey, apiBase };
+  }
+
   private async fetchKitSubscribers(
     apiKey: string,
     apiBase: string,
@@ -431,28 +440,56 @@ export class FaucetWebApi {
     return matches[0];
   }
 
-  private async submitKitSubscriptionRequest(email: string, eoa: string, ipAddress: string): Promise<void> {
-    const payload = new URLSearchParams();
-    payload.set("email_address", email);
-    payload.set("fields[eoa]", eoa);
-    payload.set("fields[ip_address]", ipAddress || "0.0.0.0");
+  private async submitKitSubscriptionRequest(
+    apiKey: string,
+    apiBase: string,
+    email: string,
+    eoa: string,
+    ipAddress: string
+  ): Promise<{ subscriptionId: string | number | null; state: string | null }> {
+    const formId = KIT_FORM_ID || "9238977";
+    const url = new URL(
+      `forms/${formId}/subscribe`,
+      apiBase.endsWith("/") ? apiBase : `${apiBase}/`
+    );
+    const body = JSON.stringify({
+      api_key: apiKey,
+      email,
+      fields: {
+        eoa,
+        ip_address: ipAddress || "0.0.0.0",
+      },
+    });
 
     const response = await FetchUtil.fetchWithTimeout(
-      KIT_SUBSCRIBE_ENDPOINT,
+      url.toString(),
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept": "application/json",
+          "Content-Type": "application/json",
         },
-        body: payload.toString(),
+        body,
       },
       10000,
     );
 
-    // Kit form submissions commonly return a redirect (3xx) or success (2xx).
-    if(!(response.status >= 200 && response.status < 400))
-      throw new Error(`Kit subscribe request failed (${response.status})`);
+    if(!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Kit subscribe request failed (${response.status}) ${details || ""}`.trim());
+    }
+
+    const payload: any = await response.json();
+    if(payload?.error)
+      throw new Error(`Kit subscribe request failed: ${payload.error}`);
+    const subscription = payload?.subscription || null;
+    if(!subscription)
+      throw new Error("Kit subscribe request did not return a subscription object");
+
+    return {
+      subscriptionId: subscription?.id ?? null,
+      state: typeof subscription?.state === "string" ? subscription.state.toLowerCase() : null,
+    };
   }
 
   private async verifyKitSubscriber(email: string, eoa: string): Promise<any> {
@@ -675,14 +712,46 @@ export class FaucetWebApi {
         };
       }
 
-      await this.submitKitSubscriptionRequest(normalizedEmail, requestedEoa, ipAddress);
+      const subscribeConfig = this.getKitSubscribeConfig();
+      if(!subscribeConfig.apiKey) {
+        return {
+          success: false,
+          failureCode: "KIT_NOT_CONFIGURED",
+          error: "Signup submission key is not configured.",
+        };
+      }
+
+      await this.submitKitSubscriptionRequest(
+        subscribeConfig.apiKey,
+        subscribeConfig.apiBase,
+        normalizedEmail,
+        requestedEoa,
+        ipAddress
+      );
       this.cachedKitSubscribers = null;
+
+      // Ensure we only return success when the subscriber can be read back from Kit.
+      let persistedSubscriber: any = null;
+      for(let attempt = 0; attempt < 4; attempt++) {
+        persistedSubscriber = await this.findKitSubscriberByEmail(apiKey, apiBase, normalizedEmail);
+        if(persistedSubscriber)
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if(!persistedSubscriber) {
+        return {
+          success: false,
+          failureCode: "KIT_SUBSCRIBE_NOT_PERSISTED",
+          error: "Signup did not persist in Kit. Please retry.",
+        };
+      }
 
       return {
         success: true,
         email: normalizedEmail,
         eoa: requestedEoa,
         ipAddress,
+        subscriberId: persistedSubscriber?.id ?? null,
       };
     } catch(ex) {
       return {

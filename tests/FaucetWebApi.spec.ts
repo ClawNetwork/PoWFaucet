@@ -262,7 +262,9 @@ describe("Faucet Web API", () => {
 
   it("check /api/kitSubscribe (locks confirmed email to original EOA)", async () => {
     const oldKitKey = process.env.KIT_API_KEY;
+    const oldKitV3Key = process.env.KIT_V3_API_KEY;
     process.env.KIT_API_KEY = "test-kit-key";
+    process.env.KIT_V3_API_KEY = "test-kit-v3-key";
 
     const fetchStub = sinon.stub(FetchUtil, "fetchWithTimeout").callsFake(async (url: any) => {
       const reqUrl = new URL(String(url));
@@ -309,22 +311,40 @@ describe("Faucet Web API", () => {
     } finally {
       fetchStub.restore();
       process.env.KIT_API_KEY = oldKitKey;
+      process.env.KIT_V3_API_KEY = oldKitV3Key;
     }
   });
 
   it("check /api/kitSubscribe (allows first-time signup)", async () => {
     const oldKitKey = process.env.KIT_API_KEY;
+    const oldKitV3Key = process.env.KIT_V3_API_KEY;
     process.env.KIT_API_KEY = "test-kit-key";
+    process.env.KIT_V3_API_KEY = "test-kit-v3-key";
 
     const fetchStub = sinon.stub(FetchUtil, "fetchWithTimeout").callsFake(async (url: any, init: any) => {
       const reqUrl = new URL(String(url));
       if(reqUrl.hostname === "api.kit.com") {
-        // Email lookup (no existing subscriber) + all-subscribers scan.
+        const method = (init?.method || "GET").toUpperCase();
+        if(method === "POST")
+          throw new Error(`unexpected method for api.kit.com: ${method} ${reqUrl.toString()}`);
+
+        // Email lookup + all-subscribers scan + post-submit persistence check.
         return {
           ok: true,
           status: 200,
           json: async () => ({
-            subscribers: [],
+            subscribers: reqUrl.searchParams.get("email_address") === "new@example.com"
+              ? [
+                {
+                  id: 999,
+                  email_address: "new@example.com",
+                  state: "inactive",
+                  fields: {
+                    eoa: "0x3333333333333333333333333333333333333333",
+                  },
+                },
+              ]
+              : [],
             pagination: {
               has_next_page: false,
               end_cursor: null,
@@ -333,13 +353,20 @@ describe("Faucet Web API", () => {
         } as any;
       }
 
-      if(reqUrl.hostname === "app.kit.com") {
-        expect((init?.method || "GET").toUpperCase()).equal("POST", "subscribe endpoint called with wrong method");
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({}),
-        } as any;
+      if(reqUrl.hostname === "api.convertkit.com") {
+        const method = (init?.method || "GET").toUpperCase();
+        if(method === "POST" && reqUrl.pathname === "/v3/forms/9238977/subscribe") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              subscription: {
+                id: 999,
+                state: "inactive",
+              },
+            }),
+          } as any;
+        }
       }
 
       throw new Error(`unexpected url: ${reqUrl.toString()}`);
@@ -361,10 +388,12 @@ describe("Faucet Web API", () => {
       expect(apiResponse.success).equal(true, "signup should have succeeded");
       expect(apiResponse.eoa).equal("0x3333333333333333333333333333333333333333", "unexpected signup wallet");
       expect(apiResponse.email).equal("new@example.com", "unexpected signup email");
-      expect(fetchStub.callCount).equal(3, "unexpected outbound request count");
+      expect(apiResponse.subscriberId).equal(999, "unexpected subscriber id");
+      expect(fetchStub.callCount).equal(4, "unexpected outbound request count");
     } finally {
       fetchStub.restore();
       process.env.KIT_API_KEY = oldKitKey;
+      process.env.KIT_V3_API_KEY = oldKitV3Key;
     }
   });
 
