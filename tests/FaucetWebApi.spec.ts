@@ -368,6 +368,65 @@ describe("Faucet Web API", () => {
     }
   });
 
+  it("check /api/kitSubscriberStatus (prefers confirmed subscriber when duplicates exist)", async () => {
+    const oldKitKey = process.env.KIT_API_KEY;
+    process.env.KIT_API_KEY = "test-kit-key";
+
+    const fetchStub = sinon.stub(FetchUtil, "fetchWithTimeout").callsFake(async (url: any) => {
+      const reqUrl = new URL(String(url));
+      if(reqUrl.hostname === "api.kit.com") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            subscribers: [
+              {
+                id: 100,
+                email_address: "dom@example.com",
+                state: "inactive",
+                updated_at: "2026-03-01T00:00:00Z",
+                fields: {
+                  eoa: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+              },
+              {
+                id: 101,
+                email_address: "dom@example.com",
+                state: "active",
+                updated_at: "2026-03-02T00:00:00Z",
+                fields: {
+                  eoa: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+              },
+            ],
+            pagination: {
+              has_next_page: false,
+              end_cursor: null,
+            },
+          }),
+        } as any;
+      }
+      throw new Error(`unexpected url: ${reqUrl.toString()}`);
+    });
+
+    try {
+      const webApi = new FaucetWebApi();
+      const apiResponse = await webApi.onApiRequest(encodeApiRequest({
+        method: "GET",
+        url: "/api/kitSubscriberStatus?email=dom@example.com&eoa=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        remoteAddr: "8.8.8.8",
+      }));
+
+      expect(!!apiResponse).equal(true, "no api response");
+      expect(apiResponse.success).equal(true, "kit status check failed");
+      expect(apiResponse.confirmed).equal(true, "confirmed subscriber should have been selected");
+      expect(apiResponse.failureCode).equal(null, "unexpected failure code");
+    } finally {
+      fetchStub.restore();
+      process.env.KIT_API_KEY = oldKitKey;
+    }
+  });
+
   it("check /api/getSession", async () => {
     ServiceManager.GetService(ModuleManager).addActionHook(null, ModuleHookAction.SessionStart, 100, "test-task", (session: FaucetSession, userInput: any) => {
       session.addBlockingTask("test", "test1", 1);

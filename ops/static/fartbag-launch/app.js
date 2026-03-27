@@ -401,6 +401,21 @@ function onSubscribe(event) {
     return;
   }
 
+  // Keep a confirmed signup email locked to its original wallet on the client too.
+  if (
+    signedUpEmail &&
+    signedUpEOA &&
+    email.toLowerCase() === signedUpEmail.toLowerCase() &&
+    eoa.toLowerCase() !== signedUpEOA.toLowerCase()
+  ) {
+    const reason = `This email is already linked to ${shortAddress(
+      signedUpEOA,
+    )}. Use the original wallet for this email.`;
+    setStatus(el.subscribeStatus, reason, true);
+    openValidationModal('Email already linked', reason, 'wallet');
+    return;
+  }
+
   const submitButton = el.subscribeForm?.querySelector('button[type="submit"]');
   if (submitButton instanceof HTMLButtonElement) {
     submitButton.disabled = true;
@@ -539,7 +554,16 @@ async function onStartClawing(event) {
     openValidationModal('Please sign up', 'Please sign up.', 'email');
     return;
   }
-  const signupEmail = (el.subscribeEmail?.value || '').trim();
+  const signupEmailRaw = (el.subscribeEmail?.value || '').trim();
+  const signupEmail = signupEmailRaw || signedUpEmail;
+  if (!isEmail(signupEmail)) {
+    setStatus(el.faucetStatus, 'Please sign up.', true);
+    openValidationModal('Please sign up', 'Please sign up.', 'email');
+    return;
+  }
+  if (el.subscribeEmail && !signupEmailRaw) {
+    el.subscribeEmail.value = signupEmail;
+  }
 
   if (el.startButton) el.startButton.disabled = true;
   setStatus(el.faucetStatus, 'Checking email confirmation...', false);
@@ -769,7 +793,7 @@ function setText(target, text) {
 }
 
 function hasCompletedSignup() {
-  const email = (el.subscribeEmail?.value || '').trim();
+  const email = ((el.subscribeEmail?.value || '').trim() || signedUpEmail || '').trim();
   const eoa = normalizeAddress(el.walletInput?.value || '');
   return (
     isEmail(email) &&
@@ -794,7 +818,7 @@ function normalizeAddress(value) {
   const trimmed = value.trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) return null;
   if (/^0x0{40}$/i.test(trimmed)) return null;
-  return trimmed;
+  return trimmed.toLowerCase();
 }
 
 function safeJsonParse(text, fallback) {

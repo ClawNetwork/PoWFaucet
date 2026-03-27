@@ -384,11 +384,51 @@ export class FaucetWebApi {
       per_page: "100",
     });
     const subscribers = Array.isArray(payload?.subscribers) ? payload.subscribers : [];
-    const normalizedEmail = email.toLowerCase();
-    return subscribers.find((item: any) => {
+    return this.selectPreferredKitSubscriberByEmail(subscribers, email);
+  }
+
+  private getKitSubscriberState(subscriber: any): string {
+    return typeof subscriber?.state === "string" ? subscriber.state.toLowerCase() : "";
+  }
+
+  private getKitSubscriberTimestamp(subscriber: any): number {
+    const updatedAt = typeof subscriber?.updated_at === "string" ? Date.parse(subscriber.updated_at) : NaN;
+    if(Number.isFinite(updatedAt))
+      return updatedAt;
+    const createdAt = typeof subscriber?.created_at === "string" ? Date.parse(subscriber.created_at) : NaN;
+    if(Number.isFinite(createdAt))
+      return createdAt;
+    return 0;
+  }
+
+  private selectPreferredKitSubscriberByEmail(subscribers: any[], email: string): any {
+    const normalizedEmail = (email || "").toLowerCase();
+    const matches = (subscribers || []).filter((item: any) => {
       const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
       return itemEmail === normalizedEmail;
-    }) || null;
+    });
+    if(matches.length === 0)
+      return null;
+
+    matches.sort((a: any, b: any) => {
+      const scoreA = this.getKitSubscriberState(a) === "active" ? 2 : 1;
+      const scoreB = this.getKitSubscriberState(b) === "active" ? 2 : 1;
+      if(scoreA !== scoreB)
+        return scoreB - scoreA;
+
+      const timeA = this.getKitSubscriberTimestamp(a);
+      const timeB = this.getKitSubscriberTimestamp(b);
+      if(timeA !== timeB)
+        return timeB - timeA;
+
+      const idA = Number(a?.id);
+      const idB = Number(b?.id);
+      if(Number.isFinite(idA) && Number.isFinite(idB) && idA !== idB)
+        return idB - idA;
+      return 0;
+    });
+
+    return matches[0];
   }
 
   private async submitKitSubscriptionRequest(email: string, eoa: string, ipAddress: string): Promise<void> {
@@ -447,10 +487,7 @@ export class FaucetWebApi {
         per_page: "100",
       });
       const subscribers = Array.isArray(payload?.subscribers) ? payload.subscribers : [];
-      const target = subscribers.find((item: any) => {
-        const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
-        return itemEmail === normalizedEmail.toLowerCase();
-      }) || null;
+      const target = this.selectPreferredKitSubscriberByEmail(subscribers, normalizedEmail);
 
       const state = typeof target?.state === "string" ? target.state.toLowerCase() : null;
       const emailExists = !!target;
@@ -464,19 +501,18 @@ export class FaucetWebApi {
 
       if(requestedEoa) {
         const allSubscribers = await this.getAllKitSubscribers(apiKey, apiBase);
-        eoaSubscriberIds = allSubscribers
-          .filter((item) => this.extractSubscriberEoa(item) === requestedEoa)
+        const matchingWalletSubscribers = allSubscribers.filter((item) => this.extractSubscriberEoa(item) === requestedEoa);
+        eoaSubscriberIds = matchingWalletSubscribers
           .map((item) => item?.id)
           .filter((id) => id !== undefined && id !== null);
         eoaExists = eoaSubscriberIds.length > 0;
         eoaMatches = !!subscriberEoa && subscriberEoa === requestedEoa;
 
-        const targetId = target?.id;
-        if(targetId !== undefined && targetId !== null) {
-          eoaExistsOnOtherSubscriber = eoaSubscriberIds.some((id) => String(id) !== String(targetId));
-        } else {
-          eoaExistsOnOtherSubscriber = eoaExists;
-        }
+        const normalizedEmailLower = normalizedEmail.toLowerCase();
+        eoaExistsOnOtherSubscriber = matchingWalletSubscribers.some((item) => {
+          const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
+          return itemEmail !== normalizedEmailLower;
+        });
       }
 
       let confirmed = emailExists && emailConfirmed;
@@ -599,6 +635,28 @@ export class FaucetWebApi {
       }
 
       const allSubscribers = await this.getAllKitSubscribers(apiKey, apiBase);
+      const normalizedEmailLower = normalizedEmail.toLowerCase();
+      const activeEmailWallets = allSubscribers
+        .filter((item) => {
+          const itemEmail = typeof item?.email_address === "string" ? item.email_address.toLowerCase() : "";
+          const state = typeof item?.state === "string" ? item.state.toLowerCase() : "";
+          return itemEmail === normalizedEmailLower && state === "active";
+        })
+        .map((item) => this.extractSubscriberEoa(item))
+        .filter((wallet) => !!wallet);
+
+      const lockedWallet = activeEmailWallets.find((wallet) => wallet !== requestedEoa);
+      if(lockedWallet) {
+        return {
+          success: false,
+          failureCode: "KIT_EMAIL_EOA_LOCKED",
+          error: "This email is already confirmed with a different wallet address.",
+          email: normalizedEmail,
+          subscriberEoa: lockedWallet,
+          requestedEoa,
+        };
+      }
+
       const sameWalletSubscribers = allSubscribers.filter((item) => {
         if(this.extractSubscriberEoa(item) !== requestedEoa)
           return false;
