@@ -105,14 +105,20 @@ Set these first:
 
 ```bash
 BASE="https://clawnet.bot/faucet-api"
-EMAIL="kitty@ioresources.com"
+EMAIL="${EMAIL:-agent@example.com}"
 WALLET_RAW="${WALLET:-0x<your_wallet_or_raw_text>}"
 IP="${IP:-$(curl -s https://api.ipify.org || echo 0.0.0.0)}"
 ```
 
+Use your own inbox for `EMAIL`. Do not reuse someone else's address.
+
 Normalize/validate wallet:
 
 ```bash
+if [ -z "$EMAIL" ] || [ "$EMAIL" = "agent@example.com" ]; then
+  echo "STEP 0: blocked - set EMAIL to your own inbox first"
+  exit 1
+fi
 WALLET=$(printf '%s' "$WALLET_RAW" | tr '[:upper:]' '[:lower:]' | sed -nE 's/.*(0x[0-9a-f]{40}).*/\1/p' | head -n1)
 if ! printf '%s' "$WALLET" | grep -Eq '^0x[0-9a-f]{40}$'; then
   echo "STEP 0: blocked - invalid wallet format"
