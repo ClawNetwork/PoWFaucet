@@ -704,6 +704,16 @@ export class FaucetWebApi {
       return new FaucetHttpResponse(405, "Method Not Allowed");
     
     let userInput = JSON.parse(body.toString("utf8"));
+    const normalizedAddr = this.normalizeEthAddress(this.decodeQueryValue(userInput?.addr || ""));
+    if(!normalizedAddr) {
+      return {
+        status: FaucetSessionStatus.FAILED,
+        failedCode: "INVALID_ADDR",
+        failedReason: "Invalid target address",
+      };
+    }
+    userInput.addr = normalizedAddr;
+
     let responseData: any = {};
     let sessionInfo: IClientSessionInfo;
     let session: FaucetSession;
