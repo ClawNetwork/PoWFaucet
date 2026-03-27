@@ -219,7 +219,7 @@ function enterTrackerMode(route) {
     el.trackerBalance.textContent = '0 CLAW';
   }
   if (el.trackerStatus) {
-    el.trackerStatus.textContent = 'minimum not reeched';
+    el.trackerStatus.textContent = 'minimum not reached';
   }
   if (el.trackerSession) {
     el.trackerSession.textContent = trackerSessionId
@@ -681,14 +681,14 @@ function updateTrackerCounter(nextBalanceWei) {
 function updateTrackerThresholdLabel(balanceWei) {
   if (!el.trackerStatus) return;
   if (trackerMaxClaimWei > 0n && balanceWei >= trackerMaxClaimWei) {
-    el.trackerStatus.textContent = 'maximim reached remind your OpenClaw to collect';
+    el.trackerStatus.textContent = 'maximum reached. Remind your OpenClaw to collect.';
     return;
   }
   if (trackerMinClaimWei > 0n && balanceWei >= trackerMinClaimWei) {
-    el.trackerStatus.textContent = 'minimum reach';
+    el.trackerStatus.textContent = 'minimum reached';
     return;
   }
-  el.trackerStatus.textContent = 'minimum not reeched';
+  el.trackerStatus.textContent = 'minimum not reached';
 }
 
 function formatClawAmount(weiValue) {
