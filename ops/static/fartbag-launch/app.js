@@ -10,6 +10,7 @@ const SIGNUP_EMAIL_KEY = 'claw_signed_up_email';
 const SIGNUP_STATE_KEY = 'claw_signed_up_state_v2';
 const CLIENT_IP_CACHE_KEY = 'claw_client_ip_v1';
 const LAST_SESSION_MAP_KEY = 'claw_last_session_by_wallet_v1';
+const AUDIO_OPT_IN_KEY = 'claw_tracker_audio_opt_in_v1';
 const LANDING_VERSION = '0.2.0';
 const LANDING_COMMIT = 'pending';
 const BUBBLE_IMAGES = ['./reef_bubble1.png', './reef_bubble2.png'];
@@ -62,6 +63,7 @@ const el = {
   trackerBalance: document.getElementById('tracker-balance'),
   trackerStatus: document.getElementById('tracker-status'),
   trackerSession: document.getElementById('tracker-session'),
+  trackerAudioToggle: document.getElementById('tracker-audio-toggle'),
 };
 
 let deriveTimer = null;
@@ -144,6 +146,14 @@ function init() {
       closeModal();
       closeSignupModal();
     }
+  });
+
+  el.trackerAudioToggle?.addEventListener('click', () => {
+    enableTrackerAudio(true).catch(() => {
+      if (el.trackerAudioToggle) {
+        el.trackerAudioToggle.textContent = 'Audio blocked, tap again';
+      }
+    });
   });
 
   window.addEventListener('message', (event) => {
@@ -747,12 +757,19 @@ function initTrackerAudio() {
   window.addEventListener('pointerdown', unlock, { passive: true });
   window.addEventListener('keydown', unlock, { passive: true });
   window.addEventListener('touchstart', unlock, { passive: true });
-  enableTrackerAudio().catch(() => {
-    // user gesture may be required
-  });
+
+  const optedIn = localStorage.getItem(AUDIO_OPT_IN_KEY) === '1';
+  if (optedIn) {
+    enableTrackerAudio(false).catch(() => {
+      // gesture may still be required
+    });
+  } else if (el.trackerAudioToggle) {
+    el.trackerAudioToggle.textContent = 'Enable Reef Audio';
+    el.trackerAudioToggle.classList.remove('active');
+  }
 }
 
-async function enableTrackerAudio() {
+async function enableTrackerAudio(fromExplicitClick = false) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) return;
 
@@ -770,6 +787,16 @@ async function enableTrackerAudio() {
   trackerAudioEnabled = trackerAudioCtx.state === 'running';
   if (trackerAudioEnabled) {
     startTrackerMusic();
+    if (fromExplicitClick) {
+      localStorage.setItem(AUDIO_OPT_IN_KEY, '1');
+    }
+    if (el.trackerAudioToggle) {
+      el.trackerAudioToggle.textContent = 'Reef Audio On';
+      el.trackerAudioToggle.classList.add('active');
+    }
+  } else if (el.trackerAudioToggle) {
+    el.trackerAudioToggle.textContent = 'Enable Reef Audio';
+    el.trackerAudioToggle.classList.remove('active');
   }
 }
 
