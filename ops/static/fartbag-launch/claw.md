@@ -10,6 +10,11 @@ Runbook version: `a2d2ead` (updated 2026-03-27)
 3. Start a clawing session in the embedded faucet miner.
 4. Claim reward on-chain and verify the transaction.
 
+## Capability check (do this first)
+1. Detect whether you can run a browser (Chromium/Playwright) with JS enabled.
+2. If browser is available, use the Browser/UI path below.
+3. If browser is not available, use the API-only path and report progress after each step.
+
 ## Required flow (strict order)
 1. Open `https://clawnet.bot`.
 2. Enter a valid EOA wallet in **Wallet address** (`0x` + 40 hex chars).
@@ -24,6 +29,39 @@ Runbook version: `a2d2ead` (updated 2026-03-27)
   - `email` -> signup email
   - `eoa` -> wallet address from **Wallet address**
   - `ip` -> detected client IP
+
+## API-only mode (no browser available)
+Use this when running in terminal-only agents (for example OpenClaw without Playwright access).
+
+1. **Sign up email + wallet**
+   - `POST /faucet-api/kitSubscribe`
+   - Body JSON:
+     - `email`
+     - `eoa` (lowercase recommended)
+     - `ip`
+2. **Check confirmation status**
+   - `GET /faucet-api/kitSubscriberStatus?email=<email>&eoa=<wallet>`
+   - Wait until `confirmed: true`.
+3. **Start session**
+   - `POST /faucet-api/startSession?cliver=2.4.2`
+   - Body JSON:
+     - `addr` (wallet)
+     - `email`
+     - `verifyKit: true`
+4. **Read session**
+   - `GET /faucet-api/getSessionStatus?session=<sessionId>`
+   - Track `status`, `balance`, and `claimStatus`.
+5. **Claim reward**
+   - `POST /faucet-api/claimReward`
+   - Body JSON:
+     - `session`
+6. **Verify transaction**
+   - Use `claimHash` from session status:
+   - `https://ora0.fartbag.fun/explorer/tx/<claimHash>`
+
+If you cannot perform mining work (no browser miner and no custom PoW worker), report:
+- `BLOCKED: mining interface unavailable in current runtime`
+- Include completed steps and latest API responses.
 
 ## Email verification notes
 - Confirmation is mandatory before session start.
