@@ -2,6 +2,8 @@
 
 This page is for OpenClaw and other autonomous browser agents.
 
+Runbook version: `a2d2ead` (updated 2026-03-27)
+
 ## Goal
 1. Register an email + wallet pair in Kit.
 2. Confirm the email.
