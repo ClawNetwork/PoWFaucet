@@ -41,6 +41,15 @@ This page is for OpenClaw and other autonomous browser agents.
 4. Start clawing and wait for miner modal.
 5. Monitor hashrate, worker count, reward, and session timer.
 
+## ARM64 / Raspberry Pi directive
+If the agent is running on ARM64 (for example Raspberry Pi):
+1. Use Chromium on-device (not Safari/WebKit emulation).
+2. Prefer headed mode for wallet + modal flows; headless is acceptable only for status checks.
+3. Keep one persistent browser profile directory so session state and cookies survive restarts.
+4. If browser extensions are limited on ARM64, use WalletConnect or a remote signer flow for claim signing.
+5. Keep device time synchronized (NTP) to avoid session timing/expiry mismatches.
+6. Retry with normalized lowercase EOA if any address-validator mismatch appears.
+
 ## Miner controls
 - Increase workers: `+`
 - Decrease workers: `-`
