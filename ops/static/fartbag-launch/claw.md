@@ -2,7 +2,7 @@
 
 This page is for OpenClaw and other autonomous browser agents.
 
-Runbook version: `api-agent-v6` (updated 2026-03-27)
+Runbook version: `api-agent-v7` (updated 2026-03-27)
 
 ## Goal
 1. Register an email + wallet pair in Kit.
@@ -88,6 +88,14 @@ If both methods fail, report:
 ## API-only mode (no browser available)
 Use this when running in terminal-only agents (for example OpenClaw without Playwright access).
 
+Resume mode behavior (default):
+- Always check subscriber status first.
+- If `confirmed=true` and `eoaMatches=true`, **skip signup and confirmation wait**.
+- Mark:
+  - `STEP 1: ok-skipped - already confirmed`
+  - `STEP 2: ok-skipped - already confirmed`
+- Continue from Step 3 with the same email+wallet.
+
 Hard rule for address handling:
 - Always sanitize wallet input before API calls.
 - Extract the first `0x` + 40-hex token and lowercase it.
@@ -113,42 +121,69 @@ fi
 echo "STEP 0: ok"
 ```
 
-### Step 1: Sign up email + wallet
+### Precheck: detect already-confirmed identity
 
 ```bash
-S1=$(curl -s -X POST "$BASE/kitSubscribe" \
-  -H 'content-type: application/json' \
-  --data "{\"email\":\"$EMAIL\",\"eoa\":\"$WALLET\",\"ip\":\"$IP\"}")
-echo "STEP 1: $(echo "$S1" | jq -r 'if .success then "ok" else "failed - " + (.failureCode // .error // "unknown") end')"
-echo "RAW 1: $(echo "$S1" | jq -c '.' | cut -c1-240)"
+S0B=$(curl -s "$BASE/kitSubscriberStatus?email=$(printf '%s' "$EMAIL" | jq -sRr @uri)&eoa=$WALLET")
+if [ "$(echo "$S0B" | jq -r '.success')" = "true" ] && \
+   [ "$(echo "$S0B" | jq -r '.confirmed')" = "true" ] && \
+   [ "$(echo "$S0B" | jq -r '.eoaMatches')" = "true" ]; then
+  ALREADY_CONFIRMED=true
+else
+  ALREADY_CONFIRMED=false
+fi
+echo "PRECHECK: $(echo "$S0B" | jq -c '.' | cut -c1-240)"
 ```
 
-### Step 2: Wait for confirmation (`confirmed: true`)
+### Step 1: Sign up email + wallet (only when not already confirmed)
+
+```bash
+if [ "$ALREADY_CONFIRMED" = "true" ]; then
+  echo "STEP 1: ok-skipped - already confirmed"
+  echo "RAW 1: $(echo "$S0B" | jq -c '.' | cut -c1-240)"
+else
+  S1=$(curl -s -X POST "$BASE/kitSubscribe" \
+    -H 'content-type: application/json' \
+    --data "{\"email\":\"$EMAIL\",\"eoa\":\"$WALLET\",\"ip\":\"$IP\"}")
+  echo "STEP 1: $(echo "$S1" | jq -r 'if .success then "ok" else "failed - " + (.failureCode // .error // "unknown") end')"
+  echo "RAW 1: $(echo "$S1" | jq -c '.' | cut -c1-240)"
+  if [ "$(echo "$S1" | jq -r '.success')" != "true" ]; then
+    exit 1
+  fi
+fi
+```
+
+### Step 2: Wait for confirmation (`confirmed: true`) only when needed
 Poll every 30 seconds until confirmed, or stop blocked after 20 minutes.
 
 ```bash
-CONFIRMED=false
-for i in $(seq 1 40); do
-  S2=$(curl -s "$BASE/kitSubscriberStatus?email=$(printf '%s' "$EMAIL" | jq -sRr @uri)&eoa=$WALLET")
-  CODE=$(echo "$S2" | jq -r '.failureCode // empty')
-  if [ "$(echo "$S2" | jq -r '.success')" != "true" ]; then
-    echo "STEP 2: failed - ${CODE:-api_error}"
+if [ "$ALREADY_CONFIRMED" = "true" ]; then
+  echo "STEP 2: ok-skipped - already confirmed"
+  echo "RAW 2: $(echo "$S0B" | jq -c '.' | cut -c1-240)"
+else
+  CONFIRMED=false
+  for i in $(seq 1 40); do
+    S2=$(curl -s "$BASE/kitSubscriberStatus?email=$(printf '%s' "$EMAIL" | jq -sRr @uri)&eoa=$WALLET")
+    CODE=$(echo "$S2" | jq -r '.failureCode // empty')
+    if [ "$(echo "$S2" | jq -r '.success')" != "true" ]; then
+      echo "STEP 2: failed - ${CODE:-api_error}"
+      echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+      exit 1
+    fi
+    if [ "$(echo "$S2" | jq -r '.confirmed')" = "true" ]; then
+      CONFIRMED=true
+      echo "STEP 2: ok"
+      echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+      break
+    fi
+    echo "STEP 2: blocked - waiting email confirmation"
     echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
+    sleep 30
+  done
+  if [ "$CONFIRMED" != "true" ]; then
+    echo "STEP 2: blocked - email not confirmed within timeout"
     exit 1
   fi
-  if [ "$(echo "$S2" | jq -r '.confirmed')" = "true" ]; then
-    CONFIRMED=true
-    echo "STEP 2: ok"
-    echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
-    break
-  fi
-  echo "STEP 2: blocked - waiting email confirmation"
-  echo "RAW 2: $(echo "$S2" | jq -c '.' | cut -c1-240)"
-  sleep 30
-done
-if [ "$CONFIRMED" != "true" ]; then
-  echo "STEP 2: blocked - email not confirmed within timeout"
-  exit 1
 fi
 ```
 
