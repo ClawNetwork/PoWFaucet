@@ -626,15 +626,11 @@ async function refreshTrackerData() {
   let displaySessionId = trackerSessionId;
 
   if (trackerSessionId && trackerSessionLocked) {
-    const response = await fetch(
-      `${FAUCET_API_BASE}/getSessionStatus?session=${encodeURIComponent(trackerSessionId)}`,
-    );
-    if (response.ok) {
-      const data = await response.json().catch(() => null);
-      if (data && typeof data === 'object') {
-        balanceWei = toBigInt(data.balance);
-        status = String(data.status || 'unknown');
-      }
+    const exactSession = await fetchExactSessionStatus(trackerSessionId);
+    if (exactSession) {
+      balanceWei = exactSession.balance;
+      status = exactSession.status;
+      displaySessionId = exactSession.sessionId || displaySessionId;
     }
   } else {
     const response = await fetch(`${FAUCET_API_BASE}/getFaucetStatus`);
@@ -663,6 +659,39 @@ async function refreshTrackerData() {
     } else {
       el.trackerSession.textContent = 'Session: waiting...';
     }
+  }
+}
+
+async function fetchExactSessionStatus(sessionId) {
+  if (!sessionId) return null;
+  const sid = String(sessionId).trim();
+  if (!sid) return null;
+
+  const fromRunning = await fetchSessionFromEndpoint('/getSession', sid);
+  if (fromRunning) return fromRunning;
+
+  return await fetchSessionFromEndpoint('/getSessionStatus', sid);
+}
+
+async function fetchSessionFromEndpoint(endpoint, sessionId) {
+  try {
+    const response = await fetch(
+      `${FAUCET_API_BASE}${endpoint}?session=${encodeURIComponent(sessionId)}`,
+    );
+    if (!response.ok) return null;
+    const data = await response.json().catch(() => null);
+    if (!data || typeof data !== 'object') return null;
+
+    const status = String(data.status || 'unknown').toLowerCase();
+    if (status === 'unknown') return null;
+
+    return {
+      sessionId: String(data.session || sessionId),
+      status,
+      balance: toBigInt(data.balance),
+    };
+  } catch {
+    return null;
   }
 }
 
