@@ -834,10 +834,10 @@ function shouldAutoEnableTrackerAudio() {
 function updateTrackerAudioButton(enabled) {
   if (!el.trackerAudioToggle) return;
   if (enabled) {
-    el.trackerAudioToggle.textContent = 'Reef Audio On (tap to mute)';
+    el.trackerAudioToggle.textContent = 'Mute Reef Audio';
     el.trackerAudioToggle.classList.add('active');
   } else {
-    el.trackerAudioToggle.textContent = 'Enable Reef Audio';
+    el.trackerAudioToggle.textContent = 'Unmute Reef Audio';
     el.trackerAudioToggle.classList.remove('active');
   }
 }
