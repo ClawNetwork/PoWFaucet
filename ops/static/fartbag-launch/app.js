@@ -91,6 +91,7 @@ let trackerAudioMaster = null;
 let trackerAudioCompressor = null;
 let trackerAudioEnabled = false;
 let trackerMusicTimer = null;
+let trackerMusicStep = 0;
 let trackerAudioHooked = false;
 const trackerSwimmers = [];
 const trackerSwimmerTimers = new Map();
@@ -846,40 +847,65 @@ function startTrackerMusic() {
   if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) return;
   if (trackerMusicTimer) return;
   const lead = [
-    523.25, 659.25, 783.99, 659.25,
-    587.33, 523.25, 493.88, 440.0,
-    392.0, 440.0, 493.88, 523.25,
-    659.25, 523.25, 440.0, 392.0,
+    // phrase A
+    523.25, 659.25, 783.99, 659.25, 587.33, 523.25, 493.88, 440.0,
+    392.0, 440.0, 493.88, 523.25, 659.25, 523.25, 440.0, 392.0,
+    // phrase B
+    392.0, 493.88, 587.33, 659.25, 587.33, 523.25, 493.88, 440.0,
+    440.0, 523.25, 659.25, 698.46, 659.25, 587.33, 523.25, 493.88,
+    // phrase C
+    523.25, 587.33, 659.25, 698.46, 783.99, 698.46, 659.25, 587.33,
+    523.25, 493.88, 440.0, 392.0, 440.0, 493.88, 523.25, 587.33,
+    // phrase D
+    659.25, 698.46, 783.99, 880.0, 783.99, 698.46, 659.25, 587.33,
+    523.25, 587.33, 659.25, 783.99, 659.25, 523.25, 440.0, 392.0,
   ];
   const bass = [
-    130.81, 146.83, 164.81, 146.83,
-    130.81, 123.47, 110.0, 98.0,
+    130.81, 146.83, 164.81, 146.83, 130.81, 123.47, 110.0, 98.0,
+    98.0, 110.0, 123.47, 130.81, 146.83, 130.81, 110.0, 98.0,
   ];
   const sparkle = [1046.5, 987.77, 1174.66, 1318.51];
-  let idx = 0;
-  trackerMusicTimer = window.setInterval(() => {
-    const now = trackerAudioCtx.currentTime;
-    const leadFreq = lead[idx % lead.length];
-    const bassFreq = bass[idx % bass.length];
-    playTone(leadFreq, now, 0.2, 0.084, 'square');
-    playTone(bassFreq, now, 0.28, 0.052, 'triangle');
-    if (idx % 4 === 2) {
-      playTone(leadFreq * 1.5, now + 0.05, 0.12, 0.045, 'sine');
+  const msPattern = [228, 268, 246, 292, 236, 276, 252, 304];
+  trackerMusicStep = 0;
+
+  const tick = () => {
+    if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) {
+      trackerMusicTimer = null;
+      return;
     }
-    if (idx % 8 === 0) {
+
+    const step = trackerMusicStep;
+    const now = trackerAudioCtx.currentTime + 0.008;
+    const leadFreq = lead[step % lead.length];
+    const bassFreq = bass[step % bass.length];
+    const swing = step % 2 === 0 ? 0 : 0.012;
+
+    playTone(leadFreq, now + swing, 0.2, 0.084, 'square');
+    playTone(bassFreq, now, 0.31, 0.052, 'triangle');
+
+    if (step % 4 === 2 || step % 7 === 3) {
+      playTone(leadFreq * 1.5, now + 0.05, 0.13, 0.045, 'sine');
+    }
+    if (step % 8 === 0 || step % 13 === 0) {
       const sparkleFreq = sparkle[randomInt(0, sparkle.length - 1)];
-      playTone(sparkleFreq, now + 0.02, 0.08, 0.032, 'sine');
-      playTone(sparkleFreq * 0.5, now + 0.09, 0.08, 0.026, 'sine');
+      playTone(sparkleFreq, now + 0.02, 0.09, 0.03, 'sine');
+      playTone(sparkleFreq * 0.5, now + 0.095, 0.1, 0.024, 'sine');
     }
-    idx += 1;
-  }, 250);
+
+    trackerMusicStep += 1;
+    const waitMs = msPattern[step % msPattern.length];
+    trackerMusicTimer = window.setTimeout(tick, waitMs);
+  };
+
+  tick();
 }
 
 function stopTrackerMusic() {
   if (trackerMusicTimer) {
-    clearInterval(trackerMusicTimer);
+    clearTimeout(trackerMusicTimer);
     trackerMusicTimer = null;
   }
+  trackerMusicStep = 0;
 }
 
 function playTone(freq, startTime, duration, gainValue, type) {
@@ -958,8 +984,8 @@ function playBubbleBloop(bubbleType = 0) {
   const now = trackerAudioCtx.currentTime;
   const highTone = bubbleType === 1;
   const baseLow = randomInt(320, 460);
-  const base = highTone ? baseLow * 2 : baseLow; // one octave up for bubble type 2
-  const peakGain = highTone ? 0.38 : 0.31;
+  const base = highTone ? Math.floor(baseLow * 1.5) : baseLow; // lower than full octave-up
+  const peakGain = highTone ? 0.247 : 0.202; // ~35% lower
   const duration = highTone ? 0.22 : 0.28;
 
   const osc = trackerAudioCtx.createOscillator();
@@ -992,7 +1018,7 @@ function playBubbleBloop(bubbleType = 0) {
     subOsc.frequency.setValueAtTime(base * 0.52, now + 0.01);
     subOsc.frequency.exponentialRampToValueAtTime(base * 0.38, now + duration + 0.02);
     subGain.gain.setValueAtTime(0.0001, now + 0.01);
-    subGain.gain.linearRampToValueAtTime(0.14, now + 0.028);
+    subGain.gain.linearRampToValueAtTime(0.091, now + 0.028);
     subGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.03);
     subOsc.connect(subGain);
     subGain.connect(trackerAudioMaster);
@@ -1007,7 +1033,7 @@ function playBubbleBloop(bubbleType = 0) {
   pop.frequency.setValueAtTime(highTone ? 2200 : 1400, now);
   pop.frequency.exponentialRampToValueAtTime(highTone ? 900 : 620, now + 0.05);
   popGain.gain.setValueAtTime(0.0001, now);
-  popGain.gain.linearRampToValueAtTime(highTone ? 0.16 : 0.13, now + 0.006);
+  popGain.gain.linearRampToValueAtTime(highTone ? 0.104 : 0.0845, now + 0.006);
   popGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
   pop.connect(popGain);
   popGain.connect(trackerAudioMaster);
