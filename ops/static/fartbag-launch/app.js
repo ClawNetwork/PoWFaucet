@@ -957,9 +957,10 @@ function playBubbleBloop(bubbleType = 0) {
   if (!trackerAudioEnabled || !trackerAudioCtx || !trackerAudioMaster) return;
   const now = trackerAudioCtx.currentTime;
   const highTone = bubbleType === 1;
-  const base = highTone ? randomInt(720, 980) : randomInt(360, 510);
-  const peakGain = highTone ? 0.2 : 0.165;
-  const duration = highTone ? 0.18 : 0.24;
+  const baseLow = randomInt(320, 460);
+  const base = highTone ? baseLow * 2 : baseLow; // one octave up for bubble type 2
+  const peakGain = highTone ? 0.38 : 0.31;
+  const duration = highTone ? 0.22 : 0.28;
 
   const osc = trackerAudioCtx.createOscillator();
   const gain = trackerAudioCtx.createGain();
@@ -971,11 +972,11 @@ function playBubbleBloop(bubbleType = 0) {
   osc.frequency.exponentialRampToValueAtTime(base * 0.72, now + duration);
 
   filter.type = 'lowpass';
-  filter.frequency.setValueAtTime(highTone ? 3300 : 2300, now);
+  filter.frequency.setValueAtTime(highTone ? 4100 : 2800, now);
   filter.Q.setValueAtTime(0.86, now);
 
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.linearRampToValueAtTime(peakGain, now + 0.018);
+  gain.gain.linearRampToValueAtTime(peakGain, now + 0.014);
   gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
   osc.connect(filter);
@@ -991,13 +992,27 @@ function playBubbleBloop(bubbleType = 0) {
     subOsc.frequency.setValueAtTime(base * 0.52, now + 0.01);
     subOsc.frequency.exponentialRampToValueAtTime(base * 0.38, now + duration + 0.02);
     subGain.gain.setValueAtTime(0.0001, now + 0.01);
-    subGain.gain.linearRampToValueAtTime(0.085, now + 0.03);
+    subGain.gain.linearRampToValueAtTime(0.14, now + 0.028);
     subGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.03);
     subOsc.connect(subGain);
     subGain.connect(trackerAudioMaster);
     subOsc.start(now + 0.01);
     subOsc.stop(now + duration + 0.05);
   }
+
+  // Short transient for clearer "bloop" attack.
+  const pop = trackerAudioCtx.createOscillator();
+  const popGain = trackerAudioCtx.createGain();
+  pop.type = 'sine';
+  pop.frequency.setValueAtTime(highTone ? 2200 : 1400, now);
+  pop.frequency.exponentialRampToValueAtTime(highTone ? 900 : 620, now + 0.05);
+  popGain.gain.setValueAtTime(0.0001, now);
+  popGain.gain.linearRampToValueAtTime(highTone ? 0.16 : 0.13, now + 0.006);
+  popGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+  pop.connect(popGain);
+  popGain.connect(trackerAudioMaster);
+  pop.start(now);
+  pop.stop(now + 0.07);
 }
 
 function onSubscribe(event) {
